@@ -1,0 +1,398 @@
+/* ── Product Metrics Tab ────────────────────────────── */
+
+.metrics-container {
+  background: #fff;
+  border-radius: 14px;
+  padding: 28px 28px 32px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.07);
+}
+
+/* Title bar */
+.metrics-title-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.metrics-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #1a1a2e;
+  margin-bottom: 4px;
+}
+
+.metrics-subtitle {
+  font-size: 0.88rem;
+  color: #6b7280;
+}
+
+/* Date picker controls */
+.metrics-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+}
+
+.metrics-controls-left {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.metrics-primary-btn {
+  padding: 10px 28px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  background: #1976d2;
+  color: #fff;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s;
+  white-space: nowrap;
+}
+
+.metrics-primary-btn:hover:not(:disabled) {
+  background: #1565c0;
+  box-shadow: 0 2px 8px rgba(25, 118, 210, 0.25);
+}
+
+.metrics-primary-btn:disabled {
+  background: #93c5fd;
+  cursor: not-allowed;
+}
+
+.metrics-date-input {
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  background: #fff;
+  color: #1a1a2e;
+  cursor: pointer;
+  min-width: 160px;
+  transition: border-color 0.15s;
+}
+
+.metrics-date-input:focus {
+  outline: none;
+  border-color: #1976d2;
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.12);
+}
+
+/* Download reports section */
+.metrics-download-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  background: #f0f7ff;
+  border: 1px dashed #90caf9;
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+}
+
+.metrics-download-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metrics-download-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #1a1a2e;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.metrics-download-desc {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.metrics-download-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.metrics-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s,
+    border-color 0.15s;
+  white-space: nowrap;
+}
+
+.metrics-download-purchase {
+  background: #fff;
+  color: #2e7d32;
+  border: 1.5px solid #a5d6a7;
+}
+
+.metrics-download-purchase:hover:not(:disabled) {
+  background: #e8f5e9;
+  border-color: #66bb6a;
+  box-shadow: 0 2px 6px rgba(46, 125, 50, 0.15);
+}
+
+.metrics-download-sales {
+  background: #fff;
+  color: #1565c0;
+  border: 1.5px solid #90caf9;
+}
+
+.metrics-download-sales:hover:not(:disabled) {
+  background: #e3f2fd;
+  border-color: #42a5f5;
+  box-shadow: 0 2px 6px rgba(25, 118, 210, 0.15);
+}
+
+.metrics-download-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.metrics-download-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* Highlight cards row */
+.metrics-highlight-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.metrics-highlight-card {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 22px;
+  border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.07);
+}
+
+.metrics-highlight-top {
+  background: linear-gradient(135deg, #e8f5e9 0%, #f1f8e9 100%);
+  border: 1px solid #a5d6a7;
+}
+
+.metrics-highlight-bottom {
+  background: linear-gradient(135deg, #fff3e0 0%, #fff8e1 100%);
+  border: 1px solid #ffcc80;
+}
+
+.metrics-highlight-icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.metrics-highlight-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.metrics-highlight-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b7280;
+}
+
+.metrics-highlight-sku {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.metrics-highlight-qty {
+  font-size: 0.88rem;
+  color: #374151;
+}
+
+/* Table row highlights */
+.metrics-row-top {
+  background-color: #f0fdf4;
+}
+
+.metrics-row-bottom {
+  background-color: #fffbeb;
+}
+
+/* Empty state */
+.metrics-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 24px;
+  gap: 14px;
+  color: #6b7280;
+}
+
+.metrics-empty-icon {
+  font-size: 3rem;
+}
+
+.metrics-empty-state p {
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+/* ── Forecast Accuracy Section ─────────────────────── */
+
+.accuracy-section {
+  margin-top: 32px;
+  padding-top: 28px;
+  border-top: 2px solid #e5e7eb;
+}
+
+.accuracy-header {
+  margin-bottom: 20px;
+}
+
+.accuracy-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #1a1a2e;
+  margin-bottom: 4px;
+}
+
+.accuracy-desc {
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.accuracy-cards {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.accuracy-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 18px 14px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+}
+
+.accuracy-card-good {
+  background: linear-gradient(135deg, #e8f5e9 0%, #f1f8e9 100%);
+  border-color: #a5d6a7;
+}
+
+.accuracy-card-value {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #1a1a2e;
+}
+
+.accuracy-card-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b7280;
+}
+
+.accuracy-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.accuracy-good {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.accuracy-mid {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.accuracy-low {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+/* Alert */
+.alert {
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  margin-bottom: 16px;
+}
+
+.alert-error {
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  color: #b91c1c;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+  .metrics-highlight-row {
+    flex-direction: column;
+  }
+
+  .metrics-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .metrics-controls-left {
+    flex-direction: column;
+  }
+
+  .metrics-download-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .metrics-download-actions {
+    flex-direction: column;
+  }
+
+  .metrics-primary-btn {
+    width: 100%;
+  }
+
+  .accuracy-cards {
+    flex-direction: column;
+  }
+}
