@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import "./AuthPage.css";
 
-function LoginPage({ onSwitchToRegister }) {
+function LoginPage({ onSwitchToRegister }: { onSwitchToRegister: () => void }) {
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -10,15 +10,14 @@ function LoginPage({ onSwitchToRegister }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
       await login(email, password);
-      // App.js will react to auth state change automatically
-    } catch (err) {
-      setError(err.message || "Login failed");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Login failed");
     } finally {
       setLoading(false);
     }

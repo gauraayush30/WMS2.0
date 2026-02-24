@@ -1,18 +1,21 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import "./AuthPage.css";
 
-function RegisterPage({ onSwitchToLogin }) {
+function RegisterPage({ onSwitchToLogin }: { onSwitchToLogin: () => void }) {
   const { register } = useAuth();
+  const [username, setUsername] = useState("");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [businessName, setBusinessName] = useState("");
+  const [businessLocation, setBusinessLocation] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
@@ -27,9 +30,16 @@ function RegisterPage({ onSwitchToLogin }) {
 
     setLoading(true);
     try {
-      await register(name, email, password);
-    } catch (err) {
-      setError(err.message || "Registration failed");
+      await register(
+        username,
+        name,
+        email,
+        password,
+        businessName,
+        businessLocation,
+      );
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Registration failed");
     } finally {
       setLoading(false);
     }
@@ -38,7 +48,6 @@ function RegisterPage({ onSwitchToLogin }) {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        {/* Brand */}
         <div className="auth-brand">
           <div className="auth-brand-icon">📦</div>
           <h1>Warehouse Manager</h1>
@@ -51,17 +60,31 @@ function RegisterPage({ onSwitchToLogin }) {
         {error && <div className="auth-alert auth-alert-error">{error}</div>}
 
         <form className="auth-form" onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label htmlFor="reg-name">Full Name</label>
-            <input
-              id="reg-name"
-              type="text"
-              placeholder="John Doe"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              autoComplete="name"
-            />
+          <div className="form-row-2">
+            <div className="form-group">
+              <label htmlFor="reg-username">Username</label>
+              <input
+                id="reg-username"
+                type="text"
+                placeholder="johndoe"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                autoComplete="username"
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="reg-name">Full Name</label>
+              <input
+                id="reg-name"
+                type="text"
+                placeholder="John Doe"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                autoComplete="name"
+              />
+            </div>
           </div>
 
           <div className="form-group">
@@ -111,6 +134,34 @@ function RegisterPage({ onSwitchToLogin }) {
                 onChange={(e) => setConfirm(e.target.value)}
                 required
                 autoComplete="new-password"
+              />
+            </div>
+          </div>
+
+          <div className="auth-divider" />
+          <p className="auth-section-label">
+            Business (optional – create or join later)
+          </p>
+
+          <div className="form-row-2">
+            <div className="form-group">
+              <label htmlFor="reg-biz">Business Name</label>
+              <input
+                id="reg-biz"
+                type="text"
+                placeholder="My Warehouse Co."
+                value={businessName}
+                onChange={(e) => setBusinessName(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="reg-loc">Location</label>
+              <input
+                id="reg-loc"
+                type="text"
+                placeholder="City, Country"
+                value={businessLocation}
+                onChange={(e) => setBusinessLocation(e.target.value)}
               />
             </div>
           </div>

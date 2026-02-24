@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 import joblib
 import pandas as pd
 from datetime import date, timedelta
+from typing import Optional
 
 import migrations
 from auth import (
@@ -16,6 +17,7 @@ from auth import (
     get_current_user_id,
 )
 
+# Legacy imports (prediction-related – kept but deferred)
 from db import (
     get_all_skus,
     get_history as db_get_history,
@@ -33,6 +35,23 @@ from db import (
     get_alert_settings as db_get_alert_settings,
     set_alert_settings as db_set_alert_settings,
     get_at_risk_skus,
+    # WMS 2.0 imports
+    create_business,
+    get_business_by_id,
+    update_business,
+    create_product,
+    get_products_by_business,
+    get_product_by_id,
+    update_product,
+    delete_product,
+    get_inventory_overview,
+    get_inventory_summary,
+    create_inventory_transaction,
+    get_inventory_transactions,
+    create_user_v2,
+    get_users_by_business,
+    update_user_business,
+    update_user_role,
 )
 from replenishment import ReplenishmentRecommendationEngine
 from scheduler import create_scheduler, run_stock_alert_job
@@ -631,9 +650,12 @@ def forecast_accuracy(start_date: str = Query(...), end_date: str = Query(...)):
 # ============================================================================
 
 class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=100)
     email: str = Field(..., description="User email address")
     password: str = Field(..., min_length=6, description="Password (min 6 chars)")
+    business_name: str = Field(default="", description="Business name (creates new business if provided)")
+    business_location: str = Field(default="", description="Business location")
 
 
 class LoginRequest(BaseModel):
@@ -647,20 +669,36 @@ class LoginRequest(BaseModel):
 
 @app.post("/auth/register", status_code=status.HTTP_201_CREATED)
 def register(req: RegisterRequest):
-    """Register a new user. Returns a JWT token on success."""
-    print(0)
+    """Register a new user. Optionally creates a business and assigns the user to it."""
     existing = get_user_by_email(req.email)
-    print(1)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this email already exists",
         )
     hashed = hash_password(req.password)
-    print(hashed)
+
+    # Create business if name provided
+    business_id = None
+    if req.business_name.strip():
+        try:
+            biz = create_business(req.business_name.strip(), req.business_location.strip() or None)
+            business_id = biz["id"]
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error creating business: {str(e)}",
+            )
+
     try:
-        user = create_user(req.name, req.email, hashed)
-        print(user)
+        user = create_user_v2(
+            username=req.username,
+            name=req.name,
+            email=req.email,
+            hashed_password=hashed,
+            business_id=business_id,
+            role="admin" if business_id else "employee",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -670,7 +708,14 @@ def register(req: RegisterRequest):
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": {"id": user["id"], "name": user["name"], "email": user["email"]},
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "name": user["name"],
+            "email": user["email"],
+            "business_id": user["business_id"],
+            "role": user["role"],
+        },
     }
 
 
@@ -692,7 +737,14 @@ def login(req: LoginRequest):
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": {"id": user["id"], "name": user["name"], "email": user["email"]},
+        "user": {
+            "id": user["id"],
+            "username": user.get("username", ""),
+            "name": user["name"],
+            "email": user["email"],
+            "business_id": user.get("business_id"),
+            "role": user.get("role", "employee"),
+        },
     }
 
 
@@ -706,7 +758,242 @@ def me(user_id: int = Depends(get_current_user_id)):
 
 
 # ============================================================================
-# ALERT ENDPOINTS
+# WMS 2.0 – BUSINESS ENDPOINTS
+# ============================================================================
+
+class BusinessCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    location: str = Field(default="", max_length=500)
+
+
+class BusinessUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    location: str = Field(default="", max_length=500)
+
+
+@app.get("/business")
+def get_business(user_id: int = Depends(get_current_user_id)):
+    """Get the current user's business."""
+    user = get_user_by_id(user_id)
+    if not user or not user.get("business_id"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No business found")
+    biz = get_business_by_id(user["business_id"])
+    if not biz:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")
+    return biz
+
+
+@app.post("/business", status_code=status.HTTP_201_CREATED)
+def create_business_endpoint(body: BusinessCreate, user_id: int = Depends(get_current_user_id)):
+    """Create a new business and assign the user to it."""
+    user = get_user_by_id(user_id)
+    if user and user.get("business_id"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User already belongs to a business")
+    try:
+        biz = create_business(body.name, body.location or None)
+        update_user_business(user_id, biz["id"])
+        return biz
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.put("/business")
+def update_business_endpoint(body: BusinessUpdate, user_id: int = Depends(get_current_user_id)):
+    """Update the current user's business."""
+    user = get_user_by_id(user_id)
+    if not user or not user.get("business_id"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No business found")
+    result = update_business(user["business_id"], body.name, body.location or None)
+    if not result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")
+    return result
+
+
+# ============================================================================
+# WMS 2.0 – PRODUCT ENDPOINTS
+# ============================================================================
+
+class ProductCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    sku_code: str = Field(..., min_length=1, max_length=100)
+    price: float = Field(default=0, ge=0)
+    stock_at_warehouse: int = Field(default=0, ge=0)
+
+
+class ProductUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    sku_code: str = Field(..., min_length=1, max_length=100)
+    price: float = Field(default=0, ge=0)
+
+
+def _get_user_business_id(user_id: int) -> int:
+    """Helper: get the business_id for a user, raise 403 if none."""
+    user = get_user_by_id(user_id)
+    if not user or not user.get("business_id"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must belong to a business to access this resource",
+        )
+    return user["business_id"]
+
+
+@app.get("/products")
+def list_products(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    search: str = Query(""),
+    user_id: int = Depends(get_current_user_id),
+):
+    """List products for the user's business (paginated, searchable)."""
+    biz_id = _get_user_business_id(user_id)
+    return get_products_by_business(biz_id, page, per_page, search)
+
+
+@app.post("/products", status_code=status.HTTP_201_CREATED)
+def create_product_endpoint(body: ProductCreate, user_id: int = Depends(get_current_user_id)):
+    """Create a new product for the user's business."""
+    biz_id = _get_user_business_id(user_id)
+    try:
+        product = create_product(body.name, body.sku_code, biz_id, body.price, body.stock_at_warehouse)
+        return product
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A product with this SKU code already exists")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.get("/products/{product_id}")
+def get_product_endpoint(product_id: int, user_id: int = Depends(get_current_user_id)):
+    """Get a single product by ID."""
+    biz_id = _get_user_business_id(user_id)
+    product = get_product_by_id(product_id, biz_id)
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    return product
+
+
+@app.put("/products/{product_id}")
+def update_product_endpoint(product_id: int, body: ProductUpdate, user_id: int = Depends(get_current_user_id)):
+    """Update a product."""
+    biz_id = _get_user_business_id(user_id)
+    try:
+        result = update_product(product_id, biz_id, body.name, body.sku_code, body.price)
+        if not result:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A product with this SKU code already exists")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.delete("/products/{product_id}")
+def delete_product_endpoint(product_id: int, user_id: int = Depends(get_current_user_id)):
+    """Delete a product."""
+    biz_id = _get_user_business_id(user_id)
+    deleted = delete_product(product_id, biz_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    return {"message": "Product deleted"}
+
+
+# ============================================================================
+# WMS 2.0 – INVENTORY ENDPOINTS
+# ============================================================================
+
+class InventoryTransactionCreate(BaseModel):
+    product_id: int = Field(..., description="Product ID")
+    stock_adjusted: int = Field(..., description="Stock change (+stock_in / -stock_out)")
+    reason: str = Field(..., min_length=1, max_length=100, description="stock_in, stock_out, adjustment, return, damage")
+    reference_no: str = Field(default="", max_length=255)
+    transaction_at: str = Field(default="", description="ISO datetime (defaults to now)")
+
+
+@app.get("/inventory/overview")
+def inventory_overview(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    search: str = Query(""),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Inventory overview – all products with current stock (paginated)."""
+    biz_id = _get_user_business_id(user_id)
+    return get_inventory_overview(biz_id, page, per_page, search)
+
+
+@app.get("/inventory/summary")
+def inventory_summary(user_id: int = Depends(get_current_user_id)):
+    """Dashboard summary: total products, total stock, out-of-stock count, low-stock count."""
+    biz_id = _get_user_business_id(user_id)
+    return get_inventory_summary(biz_id)
+
+
+@app.post("/inventory/transactions", status_code=status.HTTP_201_CREATED)
+def create_transaction_endpoint(body: InventoryTransactionCreate, user_id: int = Depends(get_current_user_id)):
+    """Record a new inventory transaction (stock in, stock out, etc.)."""
+    biz_id = _get_user_business_id(user_id)
+    try:
+        result = create_inventory_transaction(
+            product_id=body.product_id,
+            business_id=biz_id,
+            created_by=user_id,
+            stock_adjusted=body.stock_adjusted,
+            reason=body.reason,
+            reference_no=body.reference_no or None,
+            transaction_at=body.transaction_at or None,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.get("/inventory/transactions")
+def list_transactions(
+    product_id: Optional[int] = Query(None),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    user_id: int = Depends(get_current_user_id),
+):
+    """List inventory transactions (paginated, filterable by product & date range)."""
+    biz_id = _get_user_business_id(user_id)
+    return get_inventory_transactions(biz_id, product_id, page, per_page, start_date, end_date)
+
+
+# ============================================================================
+# WMS 2.0 – USERS / EMPLOYEES ENDPOINTS
+# ============================================================================
+
+class UserRoleUpdate(BaseModel):
+    role: str = Field(..., description="admin, manager, or employee")
+
+
+@app.get("/users")
+def list_users(user_id: int = Depends(get_current_user_id)):
+    """List all users in the same business."""
+    biz_id = _get_user_business_id(user_id)
+    return {"users": get_users_by_business(biz_id)}
+
+
+@app.put("/users/{target_user_id}/role")
+def update_user_role_endpoint(target_user_id: int, body: UserRoleUpdate, user_id: int = Depends(get_current_user_id)):
+    """Update role of a user in the same business."""
+    biz_id = _get_user_business_id(user_id)
+    if body.role not in ("admin", "manager", "employee"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role")
+    result = update_user_role(target_user_id, body.role, biz_id)
+    if not result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found in this business")
+    return result
+
+
+# ============================================================================
+# ALERT ENDPOINTS (legacy)
 # ============================================================================
 
 @app.get("/alerts/settings")
@@ -742,14 +1029,7 @@ def set_alert_settings_endpoint(
 
 @app.get("/alerts/at-risk")
 def at_risk_skus(user_id: int = Depends(get_current_user_id)):
-    """
-    Return SKUs that are at risk based on forecasted demand.
-
-    For each SKU, runs the prediction model over the lead-time window,
-    projects the stock level, and flags it if the projected stock falls
-    at or below the reorder point (same logic as replenishment
-    recommendations).
-    """
+    """Return SKUs that are at risk based on forecasted demand."""
     try:
         return {"at_risk": compute_at_risk_skus()}
     except Exception as e:

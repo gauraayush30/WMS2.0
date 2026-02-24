@@ -562,3 +562,334 @@ def get_at_risk_skus() -> list[dict]:
     with engine.connect() as conn:
         rows = conn.execute(query).mappings().all()
     return [dict(r) for r in rows]
+
+
+# ============================================================================
+# WMS 2.0 – Business, Product, Inventory Transaction helpers
+# ============================================================================
+
+# ── Business CRUD ────────────────────────────────────────────────────────────
+
+def create_business(name: str, location: str | None = None) -> dict:
+    query = text("""
+        INSERT INTO businesses (name, location)
+        VALUES (:name, :location)
+        RETURNING id, name, location, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {"name": name, "location": location}).mappings().first()
+    return dict(row)
+
+
+def get_business_by_id(business_id: int) -> dict | None:
+    query = text("""
+        SELECT id, name, location, created_at, updated_at
+        FROM businesses WHERE id = :id
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"id": business_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def update_business(business_id: int, name: str, location: str | None) -> dict | None:
+    query = text("""
+        UPDATE businesses SET name = :name, location = :location, updated_at = NOW()
+        WHERE id = :id
+        RETURNING id, name, location, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {"id": business_id, "name": name, "location": location}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+# ── Product CRUD ─────────────────────────────────────────────────────────────
+
+def create_product(name: str, sku_code: str, business_id: int, price: float = 0, stock_at_warehouse: int = 0) -> dict:
+    query = text("""
+        INSERT INTO products (name, sku_code, business_id, price, stock_at_warehouse)
+        VALUES (:name, :sku_code, :business_id, :price, :stock)
+        RETURNING id, name, sku_code, business_id, price, stock_at_warehouse, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "name": name, "sku_code": sku_code, "business_id": business_id,
+            "price": price, "stock": stock_at_warehouse,
+        }).mappings().first()
+    return dict(row)
+
+
+def get_products_by_business(business_id: int, page: int = 1, per_page: int = 20, search: str = "") -> dict:
+    """Return paginated products for a business with optional search."""
+    offset = (page - 1) * per_page
+
+    count_query = text("""
+        SELECT COUNT(*)::int AS total FROM products
+        WHERE business_id = :biz
+          AND (name ILIKE :search OR sku_code ILIKE :search)
+    """)
+    data_query = text("""
+        SELECT id, name, sku_code, business_id, price, stock_at_warehouse, created_at, updated_at
+        FROM products
+        WHERE business_id = :biz
+          AND (name ILIKE :search OR sku_code ILIKE :search)
+        ORDER BY name
+        LIMIT :limit OFFSET :offset
+    """)
+    search_pattern = f"%{search}%"
+    with engine.connect() as conn:
+        total = conn.execute(count_query, {"biz": business_id, "search": search_pattern}).scalar()
+        rows = conn.execute(data_query, {
+            "biz": business_id, "search": search_pattern,
+            "limit": per_page, "offset": offset,
+        }).mappings().all()
+    return {
+        "products": [dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page if total else 0,
+    }
+
+
+def get_product_by_id(product_id: int, business_id: int) -> dict | None:
+    query = text("""
+        SELECT id, name, sku_code, business_id, price, stock_at_warehouse, created_at, updated_at
+        FROM products WHERE id = :id AND business_id = :biz
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"id": product_id, "biz": business_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def update_product(product_id: int, business_id: int, name: str, sku_code: str, price: float) -> dict | None:
+    query = text("""
+        UPDATE products SET name = :name, sku_code = :sku_code, price = :price, updated_at = NOW()
+        WHERE id = :id AND business_id = :biz
+        RETURNING id, name, sku_code, business_id, price, stock_at_warehouse, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "id": product_id, "biz": business_id,
+            "name": name, "sku_code": sku_code, "price": price,
+        }).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def delete_product(product_id: int, business_id: int) -> bool:
+    query = text("DELETE FROM products WHERE id = :id AND business_id = :biz")
+    with engine.begin() as conn:
+        result = conn.execute(query, {"id": product_id, "biz": business_id})
+    return result.rowcount > 0
+
+
+# ── Inventory Overview ───────────────────────────────────────────────────────
+
+def get_inventory_overview(business_id: int, page: int = 1, per_page: int = 20, search: str = "") -> dict:
+    """Return all products with current stock for a business (paginated)."""
+    offset = (page - 1) * per_page
+    search_pattern = f"%{search}%"
+
+    count_query = text("""
+        SELECT COUNT(*)::int AS total FROM products
+        WHERE business_id = :biz
+          AND (name ILIKE :search OR sku_code ILIKE :search)
+    """)
+    data_query = text("""
+        SELECT id, name, sku_code, price, stock_at_warehouse, updated_at
+        FROM products
+        WHERE business_id = :biz
+          AND (name ILIKE :search OR sku_code ILIKE :search)
+        ORDER BY name
+        LIMIT :limit OFFSET :offset
+    """)
+    with engine.connect() as conn:
+        total = conn.execute(count_query, {"biz": business_id, "search": search_pattern}).scalar()
+        rows = conn.execute(data_query, {
+            "biz": business_id, "search": search_pattern,
+            "limit": per_page, "offset": offset,
+        }).mappings().all()
+    return {
+        "products": [dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page if total else 0,
+    }
+
+
+def get_inventory_summary(business_id: int) -> dict:
+    """High-level inventory stats for dashboard."""
+    query = text("""
+        SELECT
+            COUNT(*)::int                           AS total_products,
+            COALESCE(SUM(stock_at_warehouse), 0)::int AS total_stock,
+            COUNT(*) FILTER (WHERE stock_at_warehouse = 0)::int AS out_of_stock,
+            COUNT(*) FILTER (WHERE stock_at_warehouse > 0 AND stock_at_warehouse <= 10)::int AS low_stock
+        FROM products
+        WHERE business_id = :biz
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"biz": business_id}).mappings().fetchone()
+    return dict(row) if row else {"total_products": 0, "total_stock": 0, "out_of_stock": 0, "low_stock": 0}
+
+
+# ── Inventory Transactions ───────────────────────────────────────────────────
+
+def create_inventory_transaction(
+    product_id: int,
+    business_id: int,
+    created_by: int,
+    stock_adjusted: int,
+    reason: str,
+    reference_no: str | None = None,
+    transaction_at: str | None = None,
+) -> dict:
+    """Record an inventory adjustment and update the product stock."""
+    # Get current stock
+    prod = get_product_by_id(product_id, business_id)
+    if not prod:
+        raise ValueError(f"Product {product_id} not found for this business")
+
+    previous_stock = prod["stock_at_warehouse"]
+    new_stock = previous_stock + stock_adjusted
+
+    if new_stock < 0:
+        raise ValueError(f"Insufficient stock. Current: {previous_stock}, Adjustment: {stock_adjusted}")
+
+    # Update product stock
+    update_stock = text("""
+        UPDATE products SET stock_at_warehouse = :new_stock, updated_at = NOW()
+        WHERE id = :id AND business_id = :biz
+    """)
+
+    # Insert transaction record
+    insert_tx = text("""
+        INSERT INTO inventory_transactions
+            (product_id, business_id, created_by, stock_adjusted, previous_stock, current_stock,
+             transaction_at, reference_no, reason)
+        VALUES
+            (:product_id, :biz, :user_id, :adjusted, :prev, :curr,
+             COALESCE(:tx_at::timestamptz, NOW()), :ref, :reason)
+        RETURNING id, product_id, business_id, created_by, stock_adjusted, previous_stock,
+                  current_stock, transaction_at, reference_no, reason
+    """)
+
+    with engine.begin() as conn:
+        conn.execute(update_stock, {"new_stock": new_stock, "id": product_id, "biz": business_id})
+        row = conn.execute(insert_tx, {
+            "product_id": product_id, "biz": business_id, "user_id": created_by,
+            "adjusted": stock_adjusted, "prev": previous_stock, "curr": new_stock,
+            "tx_at": transaction_at, "ref": reference_no, "reason": reason,
+        }).mappings().first()
+
+    result = dict(row)
+    result["transaction_at"] = str(result["transaction_at"])
+    return result
+
+
+def get_inventory_transactions(
+    business_id: int,
+    product_id: int | None = None,
+    page: int = 1,
+    per_page: int = 20,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    """Return paginated inventory transactions for a business, optionally filtered by product and date range."""
+    offset = (page - 1) * per_page
+
+    where_clauses = ["t.business_id = :biz"]
+    params: dict = {"biz": business_id, "limit": per_page, "offset": offset}
+
+    if product_id:
+        where_clauses.append("t.product_id = :pid")
+        params["pid"] = product_id
+    if start_date:
+        where_clauses.append("t.transaction_at >= :start::timestamptz")
+        params["start"] = start_date
+    if end_date:
+        where_clauses.append("t.transaction_at <= (:end::date + INTERVAL '1 day')")
+        params["end"] = end_date
+
+    where_sql = " AND ".join(where_clauses)
+
+    count_query = text(f"SELECT COUNT(*)::int AS total FROM inventory_transactions t WHERE {where_sql}")
+    data_query = text(f"""
+        SELECT t.id, t.product_id, p.name AS product_name, p.sku_code,
+               t.stock_adjusted, t.previous_stock, t.current_stock,
+               t.transaction_at, t.reference_no, t.reason,
+               u.name AS created_by_name
+        FROM inventory_transactions t
+        JOIN products p ON p.id = t.product_id
+        JOIN users u ON u.id = t.created_by
+        WHERE {where_sql}
+        ORDER BY t.transaction_at DESC
+        LIMIT :limit OFFSET :offset
+    """)
+
+    with engine.connect() as conn:
+        total = conn.execute(count_query, params).scalar()
+        rows = conn.execute(data_query, params).mappings().all()
+
+    transactions = []
+    for r in rows:
+        tx = dict(r)
+        tx["transaction_at"] = str(tx["transaction_at"])
+        transactions.append(tx)
+
+    return {
+        "transactions": transactions,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page if total else 0,
+    }
+
+
+# ── User management (WMS 2.0 – updated) ─────────────────────────────────────
+
+def create_user_v2(username: str, name: str, email: str, hashed_password: str, business_id: int | None = None, role: str = "employee") -> dict:
+    query = text("""
+        INSERT INTO users (username, name, email, hashed_password, business_id, role)
+        VALUES (:username, :name, :email, :hashed_password, :business_id, :role)
+        RETURNING id, username, name, email, business_id, role, is_active, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "username": username, "name": name, "email": email,
+            "hashed_password": hashed_password, "business_id": business_id, "role": role,
+        }).mappings().first()
+    return dict(row)
+
+
+def get_users_by_business(business_id: int) -> list[dict]:
+    query = text("""
+        SELECT id, username, name, email, role, is_active, created_at, updated_at
+        FROM users WHERE business_id = :biz AND is_active = TRUE
+        ORDER BY name
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def update_user_business(user_id: int, business_id: int) -> dict | None:
+    query = text("""
+        UPDATE users SET business_id = :biz, updated_at = NOW()
+        WHERE id = :uid
+        RETURNING id, username, name, email, business_id, role, is_active, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {"uid": user_id, "biz": business_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def update_user_role(user_id: int, role: str, business_id: int) -> dict | None:
+    query = text("""
+        UPDATE users SET role = :role, updated_at = NOW()
+        WHERE id = :uid AND business_id = :biz
+        RETURNING id, username, name, email, business_id, role, is_active, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {"uid": user_id, "role": role, "biz": business_id}).mappings().fetchone()
+    return dict(row) if row else None
