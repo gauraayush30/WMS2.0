@@ -1028,3 +1028,360 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Inventory Page – Hub, Overview, History, Batch styles
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --hub-blue: #e3f2fd;
+  --hub-purple: #ede9fe;
+}
+
+.inv-page {
+  max-width: 1400px;
+}
+
+/* ── Hub navigation tiles ───────────────────────────────────── */
+.inv-hub-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.inv-hub-tile {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 24px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.18s;
+  text-align: left;
+  width: 100%;
+  text-decoration: none;
+  color: inherit;
+}
+
+.inv-hub-tile:hover {
+  border-color: #1976d2;
+  box-shadow: 0 4px 16px rgba(25, 118, 210, 0.1);
+  transform: translateY(-2px);
+}
+
+.inv-hub-tile__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #1a1a2e;
+  flex-shrink: 0;
+}
+
+.inv-hub-tile__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.inv-hub-tile__title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.inv-hub-tile__desc {
+  font-size: 0.82rem;
+  color: #6b7280;
+  line-height: 1.3;
+}
+
+.inv-hub-tile__arrow {
+  color: #9ca3af;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.inv-hub-tile:hover .inv-hub-tile__arrow {
+  transform: translateX(3px);
+  color: #1976d2;
+}
+
+/* ── Split pane (History) ───────────────────────────────────── */
+.inv-split {
+  display: flex;
+  gap: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+  min-height: 520px;
+}
+
+.inv-split__list {
+  width: 420px;
+  flex-shrink: 0;
+  border-right: 1px solid #e5e7eb;
+  overflow-y: auto;
+  max-height: 640px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.inv-split__detail {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 640px;
+}
+
+.inv-split__placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #9ca3af;
+  gap: 12px;
+}
+
+.inv-split__placeholder p {
+  font-size: 0.92rem;
+}
+
+/* ── Batch cards (left list) ────────────────────────────────── */
+.inv-batch-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: #f9fafb;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+  width: 100%;
+}
+
+.inv-batch-card:hover {
+  background: #f0f5ff;
+  border-color: #bfdbfe;
+}
+
+.inv-batch-card--active {
+  background: #e3f2fd;
+  border-color: #1976d2;
+  box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.15);
+}
+
+.inv-batch-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.inv-batch-card__date {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.inv-batch-card__mid {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.inv-batch-card__ref {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: #1a1a2e;
+}
+
+.inv-batch-card__by {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.inv-batch-card__bot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+
+.inv-batch-card__amount {
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+/* ── Detail pane (right) ────────────────────────────────────── */
+.inv-detail {
+  padding: 24px;
+}
+
+.inv-detail__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  gap: 12px;
+}
+
+.inv-detail__title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-top: 8px;
+  color: #1a1a2e;
+}
+
+.inv-detail__date {
+  font-size: 0.82rem;
+  color: #6b7280;
+  white-space: nowrap;
+}
+
+.inv-detail__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #f9fafb;
+  border-radius: 10px;
+}
+
+.inv-detail__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inv-detail__stat-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #6b7280;
+}
+
+.inv-detail__stat-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.inv-detail__notes {
+  font-size: 0.88rem;
+  color: #374151;
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  background: #fefce8;
+  border-radius: 8px;
+  border-left: 3px solid #facc15;
+}
+
+.inv-detail__section-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #374151;
+}
+
+/* ── Batch form ─────────────────────────────────────────────── */
+.inv-batch-form__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.inv-batch-form__header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  color: #1a1a2e;
+}
+
+.inv-line-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inv-line-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.inv-line-item select {
+  flex: 2;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  background: #fff;
+}
+
+.inv-line-item input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  background: #fff;
+}
+
+.inv-line-item select:focus,
+.inv-line-item input:focus {
+  outline: none;
+  border-color: #1976d2;
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
+}
+
+/* ── Additional reason badges ───────────────────────────────── */
+.reason-badge--delivery {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.reason-badge--shipment {
+  background: #fee2e2;
+  color: #7f1d1d;
+}
+
+.reason-badge--transfer {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .inv-split {
+    flex-direction: column;
+  }
+
+  .inv-split__list {
+    width: 100%;
+    max-height: 300px;
+    border-right: none;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .inv-split__detail {
+    max-height: none;
+  }
+
+  .inv-hub-tiles {
+    grid-template-columns: 1fr;
+  }
+}

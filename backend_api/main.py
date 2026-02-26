@@ -48,6 +48,9 @@ from db import (
     get_inventory_summary,
     create_inventory_transaction,
     get_inventory_transactions,
+    create_inventory_batch,
+    get_inventory_batches,
+    get_inventory_batch_detail,
     create_user_v2,
     get_users_by_business,
     update_user_business,
@@ -963,6 +966,67 @@ def list_transactions(
     """List inventory transactions (paginated, filterable by product & date range)."""
     biz_id = _get_user_business_id(user_id)
     return get_inventory_transactions(biz_id, product_id, page, per_page, start_date, end_date)
+
+
+# ── Inventory Batches ────────────────────────────────────────────────────────
+
+class BatchLineItem(BaseModel):
+    product_id: int = Field(..., description="Product ID")
+    stock_adjusted: int = Field(..., description="Stock change (+in / -out)")
+
+
+class InventoryBatchCreate(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=100,
+                        description="delivery, shipment, adjustment, return, damage, transfer")
+    reference_no: str = Field(default="", max_length=255)
+    notes: str = Field(default="", max_length=1000)
+    items: list[BatchLineItem] = Field(..., min_length=1, description="Line items")
+    transaction_at: str = Field(default="", description="ISO datetime (defaults to now)")
+
+
+@app.post("/inventory/batches", status_code=status.HTTP_201_CREATED)
+def create_batch_endpoint(body: InventoryBatchCreate, user_id: int = Depends(get_current_user_id)):
+    """Create a batch inventory transaction grouping multiple product adjustments."""
+    biz_id = _get_user_business_id(user_id)
+    try:
+        result = create_inventory_batch(
+            business_id=biz_id,
+            created_by=user_id,
+            reason=body.reason,
+            items=[item.dict() for item in body.items],
+            reference_no=body.reference_no or None,
+            notes=body.notes,
+            transaction_at=body.transaction_at or None,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@app.get("/inventory/batches")
+def list_batches(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    reason: Optional[str] = Query(None),
+    user_id: int = Depends(get_current_user_id),
+):
+    """List inventory batches (paginated, filterable)."""
+    biz_id = _get_user_business_id(user_id)
+    return get_inventory_batches(biz_id, page, per_page, start_date, end_date, reason)
+
+
+@app.get("/inventory/batches/{batch_id}")
+def get_batch_detail_endpoint(batch_id: int, user_id: int = Depends(get_current_user_id)):
+    """Get a single batch with its line items."""
+    biz_id = _get_user_business_id(user_id)
+    batch = get_inventory_batch_detail(batch_id, biz_id)
+    if not batch:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+    return batch
 
 
 # ============================================================================

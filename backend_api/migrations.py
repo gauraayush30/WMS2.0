@@ -87,6 +87,27 @@ def create_products_table() -> None:
     print("[migrations] products table is ready.")
 
 
+def create_inventory_batches_table() -> None:
+    """Batch groups multiple inventory line-items into a single event."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS inventory_batches (
+            id              SERIAL          PRIMARY KEY,
+            business_id     INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            created_by      INTEGER         NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+            reason          VARCHAR(100)    NOT NULL,
+            reference_no    VARCHAR(255),
+            notes           TEXT            DEFAULT '',
+            total_items     INTEGER         NOT NULL DEFAULT 0,
+            total_amount    DECIMAL(14, 2)  NOT NULL DEFAULT 0,
+            transaction_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] inventory_batches table is ready.")
+
+
 def create_inventory_transactions_table() -> None:
     query = text("""
         CREATE TABLE IF NOT EXISTS inventory_transactions (
@@ -99,12 +120,30 @@ def create_inventory_transactions_table() -> None:
             current_stock   INTEGER         NOT NULL,
             transaction_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
             reference_no    VARCHAR(255),
-            reason          VARCHAR(100)    NOT NULL
+            reason          VARCHAR(100)    NOT NULL,
+            batch_id        INTEGER         REFERENCES inventory_batches(id) ON DELETE SET NULL
         );
     """)
     with engine.begin() as conn:
         conn.execute(query)
     print("[migrations] inventory_transactions table is ready.")
+
+
+def migrate_inventory_transactions_table() -> None:
+    """Add batch_id column to existing inventory_transactions table if missing."""
+    with engine.begin() as conn:
+        check = text("""
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'inventory_transactions' AND column_name = 'batch_id'
+        """)
+        exists = conn.execute(check).fetchone()
+        if not exists:
+            conn.execute(text(
+                "ALTER TABLE inventory_transactions "
+                "ADD COLUMN batch_id INTEGER REFERENCES inventory_batches(id) ON DELETE SET NULL"
+            ))
+            print("[migrations] Added column inventory_transactions.batch_id")
+    print("[migrations] inventory_transactions migration complete.")
 
 
 # ── Legacy tables (kept for backward compatibility) ──────────────────────────
@@ -150,7 +189,9 @@ def run_all() -> None:
     create_users_table()
     migrate_users_table()
     create_products_table()
+    create_inventory_batches_table()
     create_inventory_transactions_table()
+    migrate_inventory_transactions_table()
     create_replenishment_settings_table()
     create_alert_settings_table()
     print("[migrations] All migrations complete.")

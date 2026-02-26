@@ -6,6 +6,8 @@ import Layout from "./components/Layout";
 import DashboardPage from "./pages/DashboardPage";
 import ProductsPage from "./pages/ProductsPage";
 import InventoryPage from "./pages/InventoryPage";
+import InventoryOverviewPage from "./pages/inventory/InventoryOverviewPage";
+import InventoryHistoryPage from "./pages/inventory/InventoryHistoryPage";
 import BusinessPage from "./pages/BusinessPage";
 import UsersPage from "./pages/UsersPage";
 import LoginPage from "./pages/LoginPage";
@@ -33,6 +35,11 @@ function AppInner() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/products" element={<ProductsPage />} />
           <Route path="/inventory" element={<InventoryPage />} />
+          <Route
+            path="/inventory/overview"
+            element={<InventoryOverviewPage />}
+          />
+          <Route path="/inventory/history" element={<InventoryHistoryPage />} />
           <Route path="/business" element={<BusinessPage />} />
           <Route path="/users" element={<UsersPage />} />
         </Route>

@@ -460,7 +460,7 @@ def get_user_by_email(email: str) -> dict | None:
 def get_user_by_id(user_id: int) -> dict | None:
     """Return a user row by id, or None if not found."""
     query = text("""
-        SELECT id, name, email, is_active, created_at
+        SELECT id, name, email, is_active, created_at, business_id
         FROM users
         WHERE id = :user_id
         LIMIT 1
@@ -844,6 +844,191 @@ def get_inventory_transactions(
         "per_page": per_page,
         "total_pages": (total + per_page - 1) // per_page if total else 0,
     }
+
+
+# ── Inventory Batches ────────────────────────────────────────────────────────
+
+def create_inventory_batch(
+    business_id: int,
+    created_by: int,
+    reason: str,
+    items: list[dict],
+    reference_no: str | None = None,
+    notes: str = "",
+    transaction_at: str | None = None,
+) -> dict:
+    """Create a batch transaction that groups multiple product adjustments into one event.
+
+    `items` is a list of dicts: [{"product_id": int, "stock_adjusted": int}, ...]
+    Returns the batch record plus its line items.
+    """
+    if not items:
+        raise ValueError("At least one line item is required")
+
+    with engine.begin() as conn:
+        # Validate all products belong to this business and compute totals
+        total_items = 0
+        total_amount = 0.0
+        line_data = []
+
+        for item in items:
+            pid = item["product_id"]
+            adj = item["stock_adjusted"]
+            prod_q = text("SELECT id, name, sku_code, price, stock_at_warehouse FROM products WHERE id = :id AND business_id = :biz")
+            prod = conn.execute(prod_q, {"id": pid, "biz": business_id}).mappings().fetchone()
+            if not prod:
+                raise ValueError(f"Product {pid} not found for this business")
+
+            prev = prod["stock_at_warehouse"]
+            new = prev + adj
+            if new < 0:
+                raise ValueError(f"Insufficient stock for {prod['name']}. Current: {prev}, Adjustment: {adj}")
+
+            total_items += abs(adj)
+            total_amount += abs(adj) * float(prod["price"])
+            line_data.append({
+                "product_id": pid,
+                "product_name": prod["name"],
+                "sku_code": prod["sku_code"],
+                "price": float(prod["price"]),
+                "stock_adjusted": adj,
+                "previous_stock": prev,
+                "current_stock": new,
+            })
+
+        # Insert batch
+        batch_q = text("""
+            INSERT INTO inventory_batches
+                (business_id, created_by, reason, reference_no, notes, total_items, total_amount, transaction_at)
+            VALUES
+                (:biz, :uid, :reason, :ref, :notes, :total_items, :total_amount,
+                 COALESCE(:tx_at::timestamptz, NOW()))
+            RETURNING id, business_id, created_by, reason, reference_no, notes,
+                      total_items, total_amount, transaction_at, created_at
+        """)
+        batch_row = conn.execute(batch_q, {
+            "biz": business_id, "uid": created_by, "reason": reason,
+            "ref": reference_no, "notes": notes,
+            "total_items": total_items, "total_amount": total_amount,
+            "tx_at": transaction_at,
+        }).mappings().first()
+        batch = dict(batch_row)
+        batch_id = batch["id"]
+
+        # Insert each line item and update product stock
+        for ld in line_data:
+            conn.execute(text("""
+                UPDATE products SET stock_at_warehouse = :new_stock, updated_at = NOW()
+                WHERE id = :id AND business_id = :biz
+            """), {"new_stock": ld["current_stock"], "id": ld["product_id"], "biz": business_id})
+
+            conn.execute(text("""
+                INSERT INTO inventory_transactions
+                    (product_id, business_id, created_by, stock_adjusted, previous_stock, current_stock,
+                     transaction_at, reference_no, reason, batch_id)
+                VALUES
+                    (:pid, :biz, :uid, :adj, :prev, :curr,
+                     COALESCE(:tx_at::timestamptz, NOW()), :ref, :reason, :batch_id)
+            """), {
+                "pid": ld["product_id"], "biz": business_id, "uid": created_by,
+                "adj": ld["stock_adjusted"], "prev": ld["previous_stock"], "curr": ld["current_stock"],
+                "tx_at": transaction_at, "ref": reference_no, "reason": reason, "batch_id": batch_id,
+            })
+
+    batch["transaction_at"] = str(batch["transaction_at"])
+    batch["created_at"] = str(batch["created_at"])
+    batch["items"] = line_data
+    return batch
+
+
+def get_inventory_batches(
+    business_id: int,
+    page: int = 1,
+    per_page: int = 20,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    """Return paginated inventory batches for the business."""
+    offset = (page - 1) * per_page
+
+    where_clauses = ["b.business_id = :biz"]
+    params: dict = {"biz": business_id, "limit": per_page, "offset": offset}
+
+    if start_date:
+        where_clauses.append("b.transaction_at >= :start::timestamptz")
+        params["start"] = start_date
+    if end_date:
+        where_clauses.append("b.transaction_at <= (:end::date + INTERVAL '1 day')")
+        params["end"] = end_date
+    if reason:
+        where_clauses.append("b.reason = :reason")
+        params["reason"] = reason
+
+    where_sql = " AND ".join(where_clauses)
+
+    count_q = text(f"SELECT COUNT(*)::int AS total FROM inventory_batches b WHERE {where_sql}")
+    data_q = text(f"""
+        SELECT b.id, b.reason, b.reference_no, b.notes, b.total_items,
+               b.total_amount, b.transaction_at, b.created_at,
+               u.name AS created_by_name
+        FROM inventory_batches b
+        JOIN users u ON u.id = b.created_by
+        WHERE {where_sql}
+        ORDER BY b.transaction_at DESC
+        LIMIT :limit OFFSET :offset
+    """)
+
+    with engine.connect() as conn:
+        total = conn.execute(count_q, params).scalar()
+        rows = conn.execute(data_q, params).mappings().all()
+
+    batches = []
+    for r in rows:
+        b = dict(r)
+        b["transaction_at"] = str(b["transaction_at"])
+        b["created_at"] = str(b["created_at"])
+        batches.append(b)
+
+    return {
+        "batches": batches,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page if total else 0,
+    }
+
+
+def get_inventory_batch_detail(batch_id: int, business_id: int) -> dict | None:
+    """Return a single batch with its line items."""
+    batch_q = text("""
+        SELECT b.id, b.reason, b.reference_no, b.notes, b.total_items,
+               b.total_amount, b.transaction_at, b.created_at,
+               u.name AS created_by_name
+        FROM inventory_batches b
+        JOIN users u ON u.id = b.created_by
+        WHERE b.id = :id AND b.business_id = :biz
+    """)
+    items_q = text("""
+        SELECT t.id, t.product_id, p.name AS product_name, p.sku_code, p.price,
+               t.stock_adjusted, t.previous_stock, t.current_stock
+        FROM inventory_transactions t
+        JOIN products p ON p.id = t.product_id
+        WHERE t.batch_id = :batch_id AND t.business_id = :biz
+        ORDER BY p.name
+    """)
+
+    with engine.connect() as conn:
+        batch_row = conn.execute(batch_q, {"id": batch_id, "biz": business_id}).mappings().fetchone()
+        if not batch_row:
+            return None
+        items_rows = conn.execute(items_q, {"batch_id": batch_id, "biz": business_id}).mappings().all()
+
+    batch = dict(batch_row)
+    batch["transaction_at"] = str(batch["transaction_at"])
+    batch["created_at"] = str(batch["created_at"])
+    batch["items"] = [dict(r) for r in items_rows]
+    return batch
 
 
 # ── User management (WMS 2.0 – updated) ─────────────────────────────────────
