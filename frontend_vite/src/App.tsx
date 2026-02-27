@@ -5,6 +5,9 @@ import "./App.css";
 import Layout from "./components/Layout";
 import DashboardPage from "./pages/DashboardPage";
 import ProductsPage from "./pages/ProductsPage";
+import CreateProduct from "./pages/products/CreateProduct";
+import ViewProduct from "./pages/products/ViewProduct";
+import EditProduct from "./pages/products/EditProduct";
 import InventoryPage from "./pages/InventoryPage";
 import InventoryOverviewPage from "./pages/inventory/InventoryOverviewPage";
 import InventoryHistoryPage from "./pages/inventory/InventoryHistoryPage";
@@ -34,6 +37,9 @@ function AppInner() {
         <Route element={<Layout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/products" element={<ProductsPage />} />
+          <Route path="/products/create" element={<CreateProduct />} />
+          <Route path="/products/:id" element={<ViewProduct />} />
+          <Route path="/products/:id/edit" element={<EditProduct />} />
           <Route path="/inventory" element={<InventoryPage />} />
           <Route
             path="/inventory/overview"

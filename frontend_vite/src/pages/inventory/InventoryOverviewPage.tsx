@@ -88,23 +88,47 @@ export default function InventoryOverviewPage() {
         </div>
       ) : (
         <>
-          <div className="product-tiles">
-            {products.map((p) => (
-              <div
-                key={p.id}
-                className={`product-tile ${getStockClass(p.stock_at_warehouse)}`}
-              >
-                <div className="product-tile-header">
-                  <span className="product-tile-name">{p.name}</span>
-                  <span className="product-tile-sku">{p.sku_code}</span>
-                </div>
-                <div className="product-tile-stock">{p.stock_at_warehouse}</div>
-                <div className="product-tile-label">units in stock</div>
-                <div className="product-tile-price">
-                  ${Number(p.price).toFixed(2)}
-                </div>
-              </div>
-            ))}
+          <div className="inv-list-table-wrapper">
+            <table className="inv-list-table">
+              <thead>
+                <tr>
+                  <th>Product Name</th>
+                  <th>SKU</th>
+                  <th className="text-right">Stock</th>
+                  <th className="text-right">Price</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.map((p) => (
+                  <tr key={p.id} className="inv-list-row">
+                    <td className="inv-list-name">{p.name}</td>
+                    <td>
+                      <span className="inv-list-sku">{p.sku_code}</span>
+                    </td>
+                    <td className="text-right">
+                      <span className="inv-list-stock">
+                        {p.stock_at_warehouse}
+                      </span>
+                    </td>
+                    <td className="text-right inv-list-price">
+                      ₹{Number(p.price).toFixed(2)}
+                    </td>
+                    <td>
+                      <span
+                        className={`inv-list-badge ${getStockClass(p.stock_at_warehouse)}`}
+                      >
+                        {p.stock_at_warehouse === 0
+                          ? "Out of Stock"
+                          : p.stock_at_warehouse <= 10
+                            ? "Low Stock"
+                            : "In Stock"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
           {totalPages > 1 && (

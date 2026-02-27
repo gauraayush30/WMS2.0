@@ -44,6 +44,7 @@ from db import (
     get_product_by_id,
     update_product,
     delete_product,
+    check_skus_exist,
     get_inventory_overview,
     get_inventory_summary,
     create_inventory_transaction,
@@ -900,6 +901,18 @@ def delete_product_endpoint(product_id: int, user_id: int = Depends(get_current_
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     return {"message": "Product deleted"}
+
+
+class SkuCheckRequest(BaseModel):
+    sku_codes: list[str] = Field(..., min_length=1, max_length=500)
+
+
+@app.post("/products/check-skus")
+def check_skus_endpoint(body: SkuCheckRequest, user_id: int = Depends(get_current_user_id)):
+    """Check which SKU codes already exist for the user's business."""
+    biz_id = _get_user_business_id(user_id)
+    existing = check_skus_exist(biz_id, body.sku_codes)
+    return {"existing": existing}
 
 
 # ============================================================================

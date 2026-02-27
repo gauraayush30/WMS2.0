@@ -682,6 +682,20 @@ def delete_product(product_id: int, business_id: int) -> bool:
     return result.rowcount > 0
 
 
+def check_skus_exist(business_id: int, sku_codes: list[str]) -> list[str]:
+    """Return the subset of sku_codes that already exist for this business."""
+    if not sku_codes:
+        return []
+    query = text("""
+        SELECT sku_code FROM products
+        WHERE business_id = :biz AND LOWER(sku_code) = ANY(:skus)
+    """)
+    lowered = [s.lower() for s in sku_codes]
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id, "skus": lowered}).fetchall()
+    return [r[0] for r in rows]
+
+
 # ── Inventory Overview ───────────────────────────────────────────────────────
 
 def get_inventory_overview(business_id: int, page: int = 1, per_page: int = 20, search: str = "") -> dict:
