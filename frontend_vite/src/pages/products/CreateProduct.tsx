@@ -1,4 +1,3 @@
-
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth, API } from "../../context/AuthContext";
@@ -21,6 +20,7 @@ interface CsvRow {
   sku_code: string;
   price: string;
   stock_at_warehouse: string;
+  uom: string;
   errors: string[];
 }
 
@@ -33,10 +33,10 @@ interface BulkResultItem {
 }
 
 /* ── Constants ──────────────────────────────────────────────── */
-const SAMPLE_CSV = `name,sku_code,price,stock_at_warehouse
-Widget Alpha,SKU-001,29.99,100
-Widget Beta,SKU-002,14.50,250
-Widget Gamma,SKU-003,5.00,0`;
+const SAMPLE_CSV = `name,sku_code,price,stock_at_warehouse,uom
+Widget Alpha,SKU-001,29.99,100,pcs
+Widget Beta,SKU-002,14.50,250,kg
+Widget Gamma,SKU-003,5.00,0,litre`;
 
 export default function CreateProduct() {
   const { authFetch } = useAuth();
@@ -48,6 +48,7 @@ export default function CreateProduct() {
     sku_code: "",
     price: "0",
     stock_at_warehouse: "0",
+    uom: "pcs",
   });
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
@@ -61,7 +62,6 @@ export default function CreateProduct() {
   const [bulkError, setBulkError] = useState("");
   const [bulkUploading, setBulkUploading] = useState(false);
   const [fileName, setFileName] = useState("");
-
 
   /* ── Handlers: single product ─────────────────────────────── */
   const handleSingleSubmit = async (e: React.FormEvent) => {
@@ -81,6 +81,7 @@ export default function CreateProduct() {
           sku_code: form.sku_code.trim(),
           price: parseFloat(form.price) || 0,
           stock_at_warehouse: parseInt(form.stock_at_warehouse) || 0,
+          uom: form.uom.trim() || "pcs",
         }),
       });
       if (!res.ok) {
@@ -88,7 +89,13 @@ export default function CreateProduct() {
         throw new Error(err.detail || "Failed to create product");
       }
       setFormSuccess(`Product "${form.name.trim()}" created successfully!`);
-      setForm({ name: "", sku_code: "", price: "0", stock_at_warehouse: "0" });
+      setForm({
+        name: "",
+        sku_code: "",
+        price: "0",
+        stock_at_warehouse: "0",
+        uom: "pcs",
+      });
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : "Error");
     } finally {
@@ -122,6 +129,7 @@ export default function CreateProduct() {
     const skuIdx = header.indexOf("sku_code");
     const priceIdx = header.indexOf("price");
     const stockIdx = header.indexOf("stock_at_warehouse");
+    const uomIdx = header.indexOf("uom");
 
     if (nameIdx === -1 || skuIdx === -1) {
       setBulkError(
@@ -138,6 +146,7 @@ export default function CreateProduct() {
       const sku_code = cols[skuIdx] || "";
       const price = priceIdx !== -1 ? cols[priceIdx] || "0" : "0";
       const stock = stockIdx !== -1 ? cols[stockIdx] || "0" : "0";
+      const uom = uomIdx !== -1 ? cols[uomIdx] || "pcs" : "pcs";
       const errors: string[] = [];
 
       if (!name) errors.push("Name is required");
@@ -158,6 +167,7 @@ export default function CreateProduct() {
         sku_code,
         price,
         stock_at_warehouse: stock,
+        uom,
         errors,
       });
     }
@@ -194,10 +204,7 @@ export default function CreateProduct() {
             (data.existing as string[]).map((s) => s.toLowerCase()),
           );
           rows.forEach((r) => {
-            if (
-              r.sku_code &&
-              existingSet.has(r.sku_code.toLowerCase())
-            ) {
+            if (r.sku_code && existingSet.has(r.sku_code.toLowerCase())) {
               r.errors.push("SKU Code already exists in database");
             }
           });
@@ -255,6 +262,7 @@ export default function CreateProduct() {
         sku_code: r.sku_code,
         price: parseFloat(r.price) || 0,
         stock_at_warehouse: parseInt(r.stock_at_warehouse) || 0,
+        uom: r.uom || "pcs",
       }));
 
       const res = await authFetch(`${API}/products/bulk`, {
@@ -372,6 +380,17 @@ export default function CreateProduct() {
                 />
               </div>
             </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Unit of Measurement</label>
+                <input
+                  type="text"
+                  placeholder="e.g. pcs, kg, litre"
+                  value={form.uom}
+                  onChange={(e) => setForm({ ...form, uom: e.target.value })}
+                />
+              </div>
+            </div>
             <div style={{ display: "flex", gap: 12 }}>
               <button
                 type="submit"
@@ -414,6 +433,7 @@ export default function CreateProduct() {
                 <span className="cp-csv-col cp-csv-col--req">sku_code *</span>
                 <span className="cp-csv-col">price</span>
                 <span className="cp-csv-col">stock_at_warehouse</span>
+                <span className="cp-csv-col">uom</span>
               </div>
             </div>
           </div>
@@ -486,6 +506,7 @@ export default function CreateProduct() {
                       <th>SKU Code</th>
                       <th>Price</th>
                       <th>Stock</th>
+                      <th>UOM</th>
                       <th>Status</th>
                       <th style={{ width: 50 }}></th>
                     </tr>
@@ -503,6 +524,7 @@ export default function CreateProduct() {
                         </td>
                         <td>₹{Number(r.price || 0).toFixed(2)}</td>
                         <td>{r.stock_at_warehouse}</td>
+                        <td>{r.uom || "pcs"}</td>
                         <td>
                           {r.errors.length > 0 ? (
                             <span className="cp-validation-err">

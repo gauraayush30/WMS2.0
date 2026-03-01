@@ -183,15 +183,73 @@ def create_alert_settings_table() -> None:
     print("[migrations] alert_settings table is ready.")
 
 
+def create_product_audit_log_table() -> None:
+    """Audit log – records every field-level change on a product."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS product_audit_log (
+            id              SERIAL          PRIMARY KEY,
+            product_id      INTEGER         NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            business_id     INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            updated_by      INTEGER         NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+            field_name      VARCHAR(100)    NOT NULL,
+            old_value       TEXT,
+            new_value       TEXT,
+            created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] product_audit_log table is ready.")
+
+
+def migrate_products_table() -> None:
+    """Add columns to existing products table if they don't exist (idempotent)."""
+    columns = [
+        ("uom", "VARCHAR(50) NOT NULL DEFAULT 'pcs'"),
+    ]
+    with engine.begin() as conn:
+        for col_name, col_def in columns:
+            check = text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'products' AND column_name = :col
+            """)
+            exists = conn.execute(check, {"col": col_name}).fetchone()
+            if not exists:
+                conn.execute(text(f"ALTER TABLE products ADD COLUMN {col_name} {col_def}"))
+                print(f"[migrations] Added column products.{col_name}")
+    print("[migrations] products table migration complete.")
+
+
+def create_invites_table() -> None:
+    """Invites table – admins invite users without a business."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS invites (
+            id                SERIAL          PRIMARY KEY,
+            from_business_id  INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            from_user_id      INTEGER         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            to_user_id        INTEGER         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            status            VARCHAR(20)     NOT NULL DEFAULT 'pending',
+            created_at        TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            updated_at        TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] invites table is ready.")
+
+
 def run_all() -> None:
     """Run all migrations in dependency order."""
     create_businesses_table()
     create_users_table()
     migrate_users_table()
     create_products_table()
+    migrate_products_table()
+    create_product_audit_log_table()
     create_inventory_batches_table()
     create_inventory_transactions_table()
     migrate_inventory_transactions_table()
     create_replenishment_settings_table()
     create_alert_settings_table()
+    create_invites_table()
     print("[migrations] All migrations complete.")

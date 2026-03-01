@@ -9,6 +9,7 @@ interface Product {
   sku_code: string;
   price: number;
   stock_at_warehouse: number;
+  uom: string;
 }
 
 export default function EditProduct() {
@@ -21,6 +22,7 @@ export default function EditProduct() {
     name: "",
     sku_code: "",
     price: "0",
+    uom: "pcs",
   });
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
@@ -37,6 +39,7 @@ export default function EditProduct() {
           name: p.name,
           sku_code: p.sku_code,
           price: String(p.price),
+          uom: p.uom || "pcs",
         });
       })
       .catch((e) => setFormError(e.message))
@@ -59,6 +62,7 @@ export default function EditProduct() {
           name: form.name.trim(),
           sku_code: form.sku_code.trim(),
           price: parseFloat(form.price) || 0,
+          uom: form.uom.trim() || "pcs",
         }),
       });
       if (!res.ok) {
@@ -125,6 +129,15 @@ export default function EditProduct() {
                 min="0"
                 value={form.price}
                 onChange={(e) => setForm({ ...form, price: e.target.value })}
+              />
+            </div>
+            <div className="form-group">
+              <label>Unit of Measurement</label>
+              <input
+                type="text"
+                placeholder="e.g. pcs, kg, litre"
+                value={form.uom}
+                onChange={(e) => setForm({ ...form, uom: e.target.value })}
               />
             </div>
           </div>

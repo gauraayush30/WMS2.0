@@ -3,7 +3,7 @@ import { LogOut, User } from "lucide-react";
 
 export default function TopBar() {
   const { user, logout } = useAuth();
-
+  console.log(user)
   return (
     <header className="topbar">
       <div className="topbar-left">

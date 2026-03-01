@@ -9,6 +9,7 @@ interface ProductStock {
   sku_code: string;
   price: number;
   stock_at_warehouse: number;
+  uom: string;
   updated_at: string;
 }
 
@@ -95,6 +96,7 @@ export default function InventoryOverviewPage() {
                   <th>Product Name</th>
                   <th>SKU</th>
                   <th className="text-right">Stock</th>
+                  <th>UOM</th>
                   <th className="text-right">Price</th>
                   <th>Status</th>
                 </tr>
@@ -111,6 +113,7 @@ export default function InventoryOverviewPage() {
                         {p.stock_at_warehouse}
                       </span>
                     </td>
+                    <td>{p.uom || "pcs"}</td>
                     <td className="text-right inv-list-price">
                       ₹{Number(p.price).toFixed(2)}
                     </td>

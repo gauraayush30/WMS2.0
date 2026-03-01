@@ -10,6 +10,8 @@ import {
   Barcode,
   Warehouse,
   Clock,
+  History,
+  Ruler,
 } from "lucide-react";
 
 interface Product {
@@ -18,8 +20,19 @@ interface Product {
   sku_code: string;
   price: number;
   stock_at_warehouse: number;
+  uom: string;
   created_at: string;
   updated_at: string;
+}
+
+interface AuditEntry {
+  id: number;
+  product_id: number;
+  field_name: string;
+  old_value: string;
+  new_value: string;
+  updated_by_name: string;
+  created_at: string;
 }
 
 export default function ViewProduct() {
@@ -30,6 +43,8 @@ export default function ViewProduct() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -41,6 +56,20 @@ export default function ViewProduct() {
       .then((data) => setProduct(data))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+  }, [authFetch, id]);
+
+  /* Fetch audit log */
+  useEffect(() => {
+    if (!id) return;
+    setAuditLoading(true);
+    authFetch(`${API}/products/${id}/audit-log`)
+      .then((r) => {
+        if (!r.ok) return { entries: [] };
+        return r.json();
+      })
+      .then((data) => setAuditLog(data.entries || []))
+      .catch(() => setAuditLog([]))
+      .finally(() => setAuditLoading(false));
   }, [authFetch, id]);
 
   const handleDelete = async () => {
@@ -172,6 +201,16 @@ export default function ViewProduct() {
         </div>
 
         <div className="vp-detail-card">
+          <div className="vp-detail-icon vp-detail-icon--purple">
+            <Ruler size={22} />
+          </div>
+          <div>
+            <span className="vp-detail-label">Unit of Measurement</span>
+            <span className="vp-detail-value">{product.uom || "pcs"}</span>
+          </div>
+        </div>
+
+        <div className="vp-detail-card">
           <div className="vp-detail-icon vp-detail-icon--gray">
             <Clock size={22} />
           </div>
@@ -194,6 +233,51 @@ export default function ViewProduct() {
             </span>
           </div>
         </div>
+      </div>
+
+      {/* Edit History / Audit Log */}
+      <div className="vp-audit-section">
+        <h3 className="vp-audit-title">
+          <History size={18} /> Edit History
+        </h3>
+        {auditLoading ? (
+          <p className="vp-audit-empty">Loading history...</p>
+        ) : auditLog.length === 0 ? (
+          <p className="vp-audit-empty">
+            No edits have been made to this product yet.
+          </p>
+        ) : (
+          <div className="vp-audit-table-wrap">
+            <table className="vp-audit-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Field</th>
+                  <th>Old Value</th>
+                  <th>New Value</th>
+                  <th>Updated By</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditLog.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>{new Date(entry.created_at).toLocaleString()}</td>
+                    <td>
+                      <span className="vp-audit-field">{entry.field_name}</span>
+                    </td>
+                    <td>
+                      <span className="vp-audit-old">{entry.old_value}</span>
+                    </td>
+                    <td>
+                      <span className="vp-audit-new">{entry.new_value}</span>
+                    </td>
+                    <td>{entry.updated_by_name}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

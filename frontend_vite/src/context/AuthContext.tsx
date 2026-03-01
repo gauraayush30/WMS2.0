@@ -3,6 +3,7 @@ import {
   useContext,
   useState,
   useCallback,
+  useEffect,
   type ReactNode,
 } from "react";
 
@@ -134,6 +135,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("wms_user", JSON.stringify(u));
     setUser(u);
   }, []);
+
+  /* Refresh user data from server on mount to keep role/business_id in sync */
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error("Unauthorized");
+        return r.json();
+      })
+      .then((freshUser: User) => {
+        localStorage.setItem("wms_user", JSON.stringify(freshUser));
+        setUser(freshUser);
+      })
+      .catch(() => {
+        /* token expired or invalid – leave as-is, will 401 on next authFetch */
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <AuthContext.Provider

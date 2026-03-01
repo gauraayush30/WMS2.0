@@ -447,7 +447,7 @@ def create_user(name: str, email: str, hashed_password: str) -> dict:
 def get_user_by_email(email: str) -> dict | None:
     """Return a user row by email, or None if not found."""
     query = text("""
-        SELECT id, name, email, hashed_password, is_active, created_at
+        SELECT id, username, name, email, hashed_password, business_id, role, is_active, created_at
         FROM users
         WHERE email = :email
         LIMIT 1
@@ -460,7 +460,7 @@ def get_user_by_email(email: str) -> dict | None:
 def get_user_by_id(user_id: int) -> dict | None:
     """Return a user row by id, or None if not found."""
     query = text("""
-        SELECT id, name, email, is_active, created_at, business_id
+        SELECT id, username, name, email, is_active, created_at, business_id, role
         FROM users
         WHERE id = :user_id
         LIMIT 1
@@ -604,16 +604,16 @@ def update_business(business_id: int, name: str, location: str | None) -> dict |
 
 # ── Product CRUD ─────────────────────────────────────────────────────────────
 
-def create_product(name: str, sku_code: str, business_id: int, price: float = 0, stock_at_warehouse: int = 0) -> dict:
+def create_product(name: str, sku_code: str, business_id: int, price: float = 0, stock_at_warehouse: int = 0, uom: str = "pcs") -> dict:
     query = text("""
-        INSERT INTO products (name, sku_code, business_id, price, stock_at_warehouse)
-        VALUES (:name, :sku_code, :business_id, :price, :stock)
-        RETURNING id, name, sku_code, business_id, price, stock_at_warehouse, created_at, updated_at
+        INSERT INTO products (name, sku_code, business_id, price, stock_at_warehouse, uom)
+        VALUES (:name, :sku_code, :business_id, :price, :stock, :uom)
+        RETURNING id, name, sku_code, business_id, price, stock_at_warehouse, uom, created_at, updated_at
     """)
     with engine.begin() as conn:
         row = conn.execute(query, {
             "name": name, "sku_code": sku_code, "business_id": business_id,
-            "price": price, "stock": stock_at_warehouse,
+            "price": price, "stock": stock_at_warehouse, "uom": uom,
         }).mappings().first()
     return dict(row)
 
@@ -628,7 +628,7 @@ def get_products_by_business(business_id: int, page: int = 1, per_page: int = 20
           AND (name ILIKE :search OR sku_code ILIKE :search)
     """)
     data_query = text("""
-        SELECT id, name, sku_code, business_id, price, stock_at_warehouse, created_at, updated_at
+        SELECT id, name, sku_code, business_id, price, stock_at_warehouse, uom, created_at, updated_at
         FROM products
         WHERE business_id = :biz
           AND (name ILIKE :search OR sku_code ILIKE :search)
@@ -653,7 +653,7 @@ def get_products_by_business(business_id: int, page: int = 1, per_page: int = 20
 
 def get_product_by_id(product_id: int, business_id: int) -> dict | None:
     query = text("""
-        SELECT id, name, sku_code, business_id, price, stock_at_warehouse, created_at, updated_at
+        SELECT id, name, sku_code, business_id, price, stock_at_warehouse, uom, created_at, updated_at
         FROM products WHERE id = :id AND business_id = :biz
     """)
     with engine.connect() as conn:
@@ -661,18 +661,91 @@ def get_product_by_id(product_id: int, business_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def update_product(product_id: int, business_id: int, name: str, sku_code: str, price: float) -> dict | None:
+def update_product(product_id: int, business_id: int, name: str, sku_code: str, price: float, uom: str = "pcs") -> dict | None:
     query = text("""
-        UPDATE products SET name = :name, sku_code = :sku_code, price = :price, updated_at = NOW()
+        UPDATE products SET name = :name, sku_code = :sku_code, price = :price, uom = :uom, updated_at = NOW()
         WHERE id = :id AND business_id = :biz
-        RETURNING id, name, sku_code, business_id, price, stock_at_warehouse, created_at, updated_at
+        RETURNING id, name, sku_code, business_id, price, stock_at_warehouse, uom, created_at, updated_at
     """)
     with engine.begin() as conn:
         row = conn.execute(query, {
             "id": product_id, "biz": business_id,
-            "name": name, "sku_code": sku_code, "price": price,
+            "name": name, "sku_code": sku_code, "price": price, "uom": uom,
         }).mappings().fetchone()
     return dict(row) if row else None
+
+
+# ── Product Audit Log ────────────────────────────────────────────────────────
+
+def create_product_audit_entries(
+    product_id: int,
+    business_id: int,
+    updated_by: int,
+    changes: list[dict],
+) -> list[dict]:
+    """Insert one audit-log row per changed field.
+
+    `changes` is a list of dicts: [{"field_name": str, "old_value": str, "new_value": str}, ...]
+    """
+    if not changes:
+        return []
+
+    insert_q = text("""
+        INSERT INTO product_audit_log (product_id, business_id, updated_by, field_name, old_value, new_value)
+        VALUES (:pid, :biz, :uid, :field, :old, :new)
+        RETURNING id, product_id, business_id, updated_by, field_name, old_value, new_value, created_at
+    """)
+    results = []
+    with engine.begin() as conn:
+        for ch in changes:
+            row = conn.execute(insert_q, {
+                "pid": product_id, "biz": business_id, "uid": updated_by,
+                "field": ch["field_name"], "old": ch["old_value"], "new": ch["new_value"],
+            }).mappings().first()
+            r = dict(row)
+            r["created_at"] = str(r["created_at"])
+            results.append(r)
+    return results
+
+
+def get_product_audit_log(product_id: int, business_id: int, page: int = 1, per_page: int = 50) -> dict:
+    """Return paginated audit log for a product, newest first."""
+    offset = (page - 1) * per_page
+
+    count_q = text("""
+        SELECT COUNT(*)::int AS total FROM product_audit_log
+        WHERE product_id = :pid AND business_id = :biz
+    """)
+    data_q = text("""
+        SELECT a.id, a.product_id, a.field_name, a.old_value, a.new_value, a.created_at,
+               u.name AS updated_by_name
+        FROM product_audit_log a
+        JOIN users u ON u.id = a.updated_by
+        WHERE a.product_id = :pid AND a.business_id = :biz
+        ORDER BY a.created_at DESC
+        LIMIT :limit OFFSET :offset
+    """)
+
+    with engine.connect() as conn:
+        total = conn.execute(count_q, {"pid": product_id, "biz": business_id}).scalar()
+        rows = conn.execute(data_q, {
+            "pid": product_id, "biz": business_id,
+            "limit": per_page, "offset": offset,
+        }).mappings().all()
+
+    entries = []
+    for r in rows:
+        e = dict(r)
+        e["created_at"] = str(e["created_at"])
+        entries.append(e)
+
+    return {
+        "entries": entries,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page if total else 0,
+    }
 
 
 def delete_product(product_id: int, business_id: int) -> bool:
@@ -709,7 +782,7 @@ def get_inventory_overview(business_id: int, page: int = 1, per_page: int = 20, 
           AND (name ILIKE :search OR sku_code ILIKE :search)
     """)
     data_query = text("""
-        SELECT id, name, sku_code, price, stock_at_warehouse, updated_at
+        SELECT id, name, sku_code, price, stock_at_warehouse, uom, updated_at
         FROM products
         WHERE business_id = :biz
           AND (name ILIKE :search OR sku_code ILIKE :search)
@@ -1092,3 +1165,123 @@ def update_user_role(user_id: int, role: str, business_id: int) -> dict | None:
     with engine.begin() as conn:
         row = conn.execute(query, {"uid": user_id, "role": role, "biz": business_id}).mappings().fetchone()
     return dict(row) if row else None
+
+
+# ── Invite system ────────────────────────────────────────────────────────────
+
+def get_users_without_business(search: str = "") -> list[dict]:
+    """Return users who don't belong to any business."""
+    query = text("""
+        SELECT id, username, name, email, created_at
+        FROM users
+        WHERE business_id IS NULL AND is_active = TRUE
+          AND (name ILIKE :search OR email ILIKE :search)
+        ORDER BY name
+        LIMIT 50
+    """)
+    search_pattern = f"%{search}%"
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"search": search_pattern}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def create_invite(from_business_id: int, from_user_id: int, to_user_id: int) -> dict:
+    """Create an invite. Raises if duplicate pending invite exists."""
+    query = text("""
+        INSERT INTO invites (from_business_id, from_user_id, to_user_id, status)
+        VALUES (:biz, :from_uid, :to_uid, 'pending')
+        RETURNING id, from_business_id, from_user_id, to_user_id, status, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "biz": from_business_id, "from_uid": from_user_id, "to_uid": to_user_id,
+        }).mappings().first()
+    return dict(row)
+
+
+def get_sent_invites(business_id: int) -> list[dict]:
+    """Return all invites sent from a business, with invitee info."""
+    query = text("""
+        SELECT i.id, i.from_business_id, i.from_user_id, i.to_user_id, i.status,
+               i.created_at, i.updated_at,
+               u.name AS to_user_name, u.email AS to_user_email
+        FROM invites i
+        JOIN users u ON u.id = i.to_user_id
+        WHERE i.from_business_id = :biz
+        ORDER BY i.created_at DESC
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_received_invites(user_id: int) -> list[dict]:
+    """Return all invites received by a user, with business + sender info."""
+    query = text("""
+        SELECT i.id, i.from_business_id, i.from_user_id, i.to_user_id, i.status,
+               i.created_at, i.updated_at,
+               b.name AS business_name, b.location AS business_location,
+               u.name AS from_user_name
+        FROM invites i
+        JOIN businesses b ON b.id = i.from_business_id
+        JOIN users u ON u.id = i.from_user_id
+        WHERE i.to_user_id = :uid
+        ORDER BY i.created_at DESC
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"uid": user_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def accept_invite(invite_id: int, user_id: int) -> dict | None:
+    """Accept an invite: update invite status, set user's business_id + role."""
+    get_q = text("""
+        SELECT id, from_business_id, to_user_id, status
+        FROM invites WHERE id = :id AND to_user_id = :uid AND status = 'pending'
+    """)
+    update_invite_q = text("""
+        UPDATE invites SET status = 'accepted', updated_at = NOW()
+        WHERE id = :id
+        RETURNING id, from_business_id, from_user_id, to_user_id, status, created_at, updated_at
+    """)
+    update_user_q = text("""
+        UPDATE users SET business_id = :biz, role = 'employee', updated_at = NOW()
+        WHERE id = :uid
+        RETURNING id, username, name, email, business_id, role
+    """)
+    reject_others_q = text("""
+        UPDATE invites SET status = 'rejected', updated_at = NOW()
+        WHERE to_user_id = :uid AND status = 'pending' AND id != :id
+    """)
+    with engine.begin() as conn:
+        invite = conn.execute(get_q, {"id": invite_id, "uid": user_id}).mappings().fetchone()
+        if not invite:
+            return None
+        conn.execute(update_invite_q, {"id": invite_id})
+        conn.execute(update_user_q, {"uid": user_id, "biz": invite["from_business_id"]})
+        conn.execute(reject_others_q, {"uid": user_id, "id": invite_id})
+    return {"message": "Invite accepted", "business_id": invite["from_business_id"]}
+
+
+def reject_invite(invite_id: int, user_id: int) -> dict | None:
+    """Reject an invite."""
+    query = text("""
+        UPDATE invites SET status = 'rejected', updated_at = NOW()
+        WHERE id = :id AND to_user_id = :uid AND status = 'pending'
+        RETURNING id, from_business_id, from_user_id, to_user_id, status, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {"id": invite_id, "uid": user_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def check_pending_invite(from_business_id: int, to_user_id: int) -> bool:
+    """Check if there's already a pending invite from this business to this user."""
+    query = text("""
+        SELECT 1 FROM invites
+        WHERE from_business_id = :biz AND to_user_id = :uid AND status = 'pending'
+        LIMIT 1
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"biz": from_business_id, "uid": to_user_id}).fetchone()
+    return row is not None

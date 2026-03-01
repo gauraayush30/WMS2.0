@@ -9,6 +9,7 @@ interface Product {
   sku_code: string;
   price: number;
   stock_at_warehouse: number;
+  uom: string;
   created_at: string;
   updated_at: string;
 }
@@ -123,6 +124,7 @@ export default function ProductsPage() {
                   <th>Name</th>
                   <th>SKU Code</th>
                   <th>Price</th>
+                  <th>UOM</th>
                   <th>Stock</th>
                   <th>Updated</th>
                   <th style={{ width: 60 }}></th>
@@ -140,6 +142,7 @@ export default function ProductsPage() {
                       <code>{p.sku_code}</code>
                     </td>
                     <td>₹{Number(p.price).toFixed(2)}</td>
+                    <td>{p.uom || "pcs"}</td>
                     <td>
                       <span
                         className={`stock-badge ${
