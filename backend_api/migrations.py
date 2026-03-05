@@ -238,6 +238,75 @@ def create_invites_table() -> None:
     print("[migrations] invites table is ready.")
 
 
+def create_delivery_locations_table() -> None:
+    """Delivery locations belonging to a business."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS delivery_locations (
+            id               SERIAL          PRIMARY KEY,
+            business_id      INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            name             VARCHAR(255)    NOT NULL,
+            address          TEXT            NOT NULL DEFAULT '',
+            city             VARCHAR(255)    NOT NULL DEFAULT '',
+            state            VARCHAR(255)    NOT NULL DEFAULT '',
+            zip_code         VARCHAR(50)     NOT NULL DEFAULT '',
+            contact_person   VARCHAR(255)    NOT NULL DEFAULT '',
+            contact_phone    VARCHAR(50)     NOT NULL DEFAULT '',
+            notes            TEXT            NOT NULL DEFAULT '',
+            is_active        BOOLEAN         NOT NULL DEFAULT TRUE,
+            created_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            updated_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] delivery_locations table is ready.")
+
+
+def migrate_products_table_v2() -> None:
+    """Add PAR level, reorder point, safety stock, lead time, max stock to products."""
+    columns = [
+        ("par_level",        "INTEGER NOT NULL DEFAULT 0"),
+        ("reorder_point",    "INTEGER NOT NULL DEFAULT 0"),
+        ("safety_stock",     "INTEGER NOT NULL DEFAULT 0"),
+        ("lead_time_days",   "INTEGER NOT NULL DEFAULT 0"),
+        ("max_stock_level",  "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    with engine.begin() as conn:
+        for col_name, col_def in columns:
+            check = text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'products' AND column_name = :col
+            """)
+            exists = conn.execute(check, {"col": col_name}).fetchone()
+            if not exists:
+                conn.execute(text(f"ALTER TABLE products ADD COLUMN {col_name} {col_def}"))
+                print(f"[migrations] Added column products.{col_name}")
+    print("[migrations] products table v2 migration complete.")
+
+
+def migrate_products_table_v3() -> None:
+    """Add warehouse location fields to products (zone, aisle, rack, shelf, level, bin)."""
+    columns = [
+        ("location_zone",   "VARCHAR(50) NOT NULL DEFAULT ''"),
+        ("location_aisle",  "VARCHAR(50) NOT NULL DEFAULT ''"),
+        ("location_rack",   "VARCHAR(50) NOT NULL DEFAULT ''"),
+        ("location_shelf",  "VARCHAR(50) NOT NULL DEFAULT ''"),
+        ("location_level",  "VARCHAR(50) NOT NULL DEFAULT ''"),
+        ("location_bin",    "VARCHAR(50) NOT NULL DEFAULT ''"),
+    ]
+    with engine.begin() as conn:
+        for col_name, col_def in columns:
+            check = text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'products' AND column_name = :col
+            """)
+            exists = conn.execute(check, {"col": col_name}).fetchone()
+            if not exists:
+                conn.execute(text(f"ALTER TABLE products ADD COLUMN {col_name} {col_def}"))
+                print(f"[migrations] Added column products.{col_name}")
+    print("[migrations] products table v3 (warehouse locations) migration complete.")
+
+
 def run_all() -> None:
     """Run all migrations in dependency order."""
     create_businesses_table()
@@ -245,6 +314,8 @@ def run_all() -> None:
     migrate_users_table()
     create_products_table()
     migrate_products_table()
+    migrate_products_table_v2()
+    migrate_products_table_v3()
     create_product_audit_log_table()
     create_inventory_batches_table()
     create_inventory_transactions_table()
@@ -252,4 +323,5 @@ def run_all() -> None:
     create_replenishment_settings_table()
     create_alert_settings_table()
     create_invites_table()
+    create_delivery_locations_table()
     print("[migrations] All migrations complete.")

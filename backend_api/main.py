@@ -14,6 +14,8 @@ from routes.products import router as products_router
 from routes.inventory import router as inventory_router
 from routes.users import router as users_router
 from routes.invites import router as invites_router
+from routes.delivery_locations import router as delivery_locations_router
+from routes.dashboard import router as dashboard_router
 from routes.legacy import router as legacy_router
 
 
@@ -44,4 +46,6 @@ app.include_router(products_router)
 app.include_router(inventory_router)
 app.include_router(users_router)
 app.include_router(invites_router)
+app.include_router(delivery_locations_router)
+app.include_router(dashboard_router)
 app.include_router(legacy_router)

@@ -1954,3 +1954,131 @@ tbody tr:hover {
   background: #fee2e2;
   color: #991b1b;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Dashboard Page
+   ═══════════════════════════════════════════════════════════════ */
+
+.dash-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.dash-stat-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transition: box-shadow 0.15s;
+}
+
+.dash-stat-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.dash-stat-card--warn {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.dash-stat-card--danger {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
+
+.dash-stat-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+.dash-stat-icon--blue {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.dash-stat-icon--orange {
+  background: #ffedd5;
+  color: #ea580c;
+}
+
+.dash-stat-icon--yellow {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.dash-stat-icon--red {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.dash-stat-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.dash-stat-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #1a1a2e;
+}
+
+.dash-stat-label {
+  font-size: 0.82rem;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+/* ── Dashboard Alert Banners ────────────────────── */
+.dash-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
+.dash-alert--warning {
+  background: #fffbeb;
+  border: 1px solid #f59e0b;
+  color: #92400e;
+}
+
+.dash-alert--info {
+  background: #eff6ff;
+  border: 1px solid #3b82f6;
+  color: #1e40af;
+}
+
+.dash-alert--danger {
+  background: #fef2f2;
+  border: 1px solid #ef4444;
+  color: #991b1b;
+}
+
+/* ── Dashboard Section ──────────────────────────── */
+.dash-section {
+  margin-top: 24px;
+}
+
+.dash-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 12px;
+}

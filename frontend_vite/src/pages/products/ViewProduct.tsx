@@ -12,6 +12,12 @@ import {
   Clock,
   History,
   Ruler,
+  AlertTriangle,
+  ArrowDownToLine,
+  ShieldCheck,
+  Truck,
+  TrendingUp,
+  MapPin,
 } from "lucide-react";
 
 interface Product {
@@ -21,6 +27,17 @@ interface Product {
   price: number;
   stock_at_warehouse: number;
   uom: string;
+  par_level: number;
+  reorder_point: number;
+  safety_stock: number;
+  lead_time_days: number;
+  max_stock_level: number;
+  location_zone: string;
+  location_aisle: string;
+  location_rack: string;
+  location_shelf: string;
+  location_level: string;
+  location_bin: string;
   created_at: string;
   updated_at: string;
 }
@@ -233,6 +250,131 @@ export default function ViewProduct() {
             </span>
           </div>
         </div>
+      </div>
+
+      {/* Inventory Management section */}
+      <h3
+        style={{
+          marginTop: 24,
+          marginBottom: 12,
+          color: "var(--text-secondary)",
+        }}
+      >
+        Inventory Management
+      </h3>
+      <div className="vp-grid">
+        <div className="vp-detail-card">
+          <div className="vp-detail-icon vp-detail-icon--blue">
+            <TrendingUp size={22} />
+          </div>
+          <div>
+            <span className="vp-detail-label">PAR Level</span>
+            <span className="vp-detail-value">{product.par_level ?? 0}</span>
+          </div>
+        </div>
+
+        <div className="vp-detail-card">
+          <div className="vp-detail-icon vp-detail-icon--yellow">
+            <ArrowDownToLine size={22} />
+          </div>
+          <div>
+            <span className="vp-detail-label">Reorder Point</span>
+            <span className="vp-detail-value">
+              {product.reorder_point ?? 0}
+            </span>
+          </div>
+        </div>
+
+        <div className="vp-detail-card">
+          <div className="vp-detail-icon vp-detail-icon--green">
+            <ShieldCheck size={22} />
+          </div>
+          <div>
+            <span className="vp-detail-label">Safety Stock</span>
+            <span className="vp-detail-value">{product.safety_stock ?? 0}</span>
+          </div>
+        </div>
+
+        <div className="vp-detail-card">
+          <div className="vp-detail-icon vp-detail-icon--purple">
+            <Truck size={22} />
+          </div>
+          <div>
+            <span className="vp-detail-label">Lead Time</span>
+            <span className="vp-detail-value">
+              {product.lead_time_days ?? 0} days
+            </span>
+          </div>
+        </div>
+
+        <div className="vp-detail-card">
+          <div className="vp-detail-icon vp-detail-icon--yellow">
+            <AlertTriangle size={22} />
+          </div>
+          <div>
+            <span className="vp-detail-label">Max Stock Level</span>
+            <span className="vp-detail-value">
+              {product.max_stock_level ?? 0}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Warehouse Location section */}
+      <h3
+        style={{
+          marginTop: 24,
+          marginBottom: 12,
+          color: "var(--text-secondary)",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <MapPin size={18} /> Warehouse Location
+        {!product.location_zone &&
+          !product.location_aisle &&
+          !product.location_rack &&
+          !product.location_shelf &&
+          !product.location_level &&
+          !product.location_bin && (
+            <span
+              style={{
+                fontSize: 12,
+                background: "var(--danger, #ef4444)",
+                color: "#fff",
+                padding: "2px 8px",
+                borderRadius: 4,
+                marginLeft: 8,
+              }}
+            >
+              Not Set
+            </span>
+          )}
+      </h3>
+      <div className="vp-grid">
+        {[
+          { label: "Zone", value: product.location_zone },
+          { label: "Aisle", value: product.location_aisle },
+          { label: "Rack", value: product.location_rack },
+          { label: "Shelf", value: product.location_shelf },
+          { label: "Level", value: product.location_level },
+          { label: "Bin / Pallet", value: product.location_bin },
+        ].map((item) => (
+          <div className="vp-detail-card" key={item.label}>
+            <div className="vp-detail-icon vp-detail-icon--blue">
+              <MapPin size={22} />
+            </div>
+            <div>
+              <span className="vp-detail-label">{item.label}</span>
+              <span className="vp-detail-value">
+                {item.value || (
+                  <span style={{ color: "var(--text-muted, #999)" }}>—</span>
+                )}
+              </span>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Edit History / Audit Log */}

@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { Building2, UserPlus, ChevronRight, Mail } from "lucide-react";
+import { Building2, UserPlus, ChevronRight, Mail, MapPin } from "lucide-react";
 
 export default function BusinessPage() {
   const { user } = useAuth();
@@ -46,6 +46,23 @@ export default function BusinessPage() {
               {isAdmin
                 ? "Invite users to your business and track sent invites"
                 : "View and respond to business invitations"}
+            </span>
+          </div>
+          <ChevronRight size={20} className="inv-hub-tile__arrow" />
+        </Link>
+
+        {/* Delivery Locations tile */}
+        <Link to="/business/delivery-locations" className="inv-hub-tile">
+          <div
+            className="inv-hub-tile__icon"
+            style={{ background: "var(--hub-green, #22c55e)" }}
+          >
+            <MapPin size={28} />
+          </div>
+          <div className="inv-hub-tile__body">
+            <span className="inv-hub-tile__title">Delivery Locations</span>
+            <span className="inv-hub-tile__desc">
+              Manage delivery locations for your business
             </span>
           </div>
           <ChevronRight size={20} className="inv-hub-tile__arrow" />

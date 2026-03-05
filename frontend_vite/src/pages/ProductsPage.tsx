@@ -1,7 +1,15 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth, API } from "../context/AuthContext";
-import { Plus, Search, MoreVertical, Eye, Pencil, Trash2 } from "lucide-react";
+import {
+  Plus,
+  Search,
+  MoreVertical,
+  Eye,
+  Pencil,
+  Trash2,
+  MapPin,
+} from "lucide-react";
 
 interface Product {
   id: number;
@@ -10,6 +18,12 @@ interface Product {
   price: number;
   stock_at_warehouse: number;
   uom: string;
+  location_zone: string;
+  location_aisle: string;
+  location_rack: string;
+  location_shelf: string;
+  location_level: string;
+  location_bin: string;
   created_at: string;
   updated_at: string;
 }
@@ -126,6 +140,7 @@ export default function ProductsPage() {
                   <th>Price</th>
                   <th>UOM</th>
                   <th>Stock</th>
+                  <th>Location</th>
                   <th>Updated</th>
                   <th style={{ width: 60 }}></th>
                 </tr>
@@ -155,6 +170,37 @@ export default function ProductsPage() {
                       >
                         {p.stock_at_warehouse}
                       </span>
+                    </td>
+                    <td>
+                      {p.location_zone ||
+                      p.location_aisle ||
+                      p.location_rack ||
+                      p.location_shelf ||
+                      p.location_level ||
+                      p.location_bin ? (
+                        <span
+                          title={[
+                            p.location_zone && `Zone ${p.location_zone}`,
+                            p.location_aisle && `Aisle ${p.location_aisle}`,
+                            p.location_rack && `Rack ${p.location_rack}`,
+                            p.location_shelf && `Shelf ${p.location_shelf}`,
+                            p.location_level && `Level ${p.location_level}`,
+                            p.location_bin && `Bin ${p.location_bin}`,
+                          ]
+                            .filter(Boolean)
+                            .join(" / ")}
+                          style={{ color: "var(--success, #22c55e)" }}
+                        >
+                          <MapPin size={16} />
+                        </span>
+                      ) : (
+                        <span
+                          style={{ color: "var(--text-muted, #999)" }}
+                          title="No location set"
+                        >
+                          <MapPin size={16} />
+                        </span>
+                      )}
                     </td>
                     <td>{new Date(p.updated_at).toLocaleDateString()}</td>
                     <td>

@@ -42,6 +42,17 @@ class ProductCreate(BaseModel):
     price: float = Field(default=0, ge=0)
     stock_at_warehouse: int = Field(default=0, ge=0)
     uom: str = Field(default="pcs", max_length=50)
+    par_level: int = Field(default=0, ge=0)
+    reorder_point: int = Field(default=0, ge=0)
+    safety_stock: int = Field(default=0, ge=0)
+    lead_time_days: int = Field(default=0, ge=0)
+    max_stock_level: int = Field(default=0, ge=0)
+    location_zone: str = Field(default="", max_length=50)
+    location_aisle: str = Field(default="", max_length=50)
+    location_rack: str = Field(default="", max_length=50)
+    location_shelf: str = Field(default="", max_length=50)
+    location_level: str = Field(default="", max_length=50)
+    location_bin: str = Field(default="", max_length=50)
 
 
 class ProductUpdate(BaseModel):
@@ -49,6 +60,17 @@ class ProductUpdate(BaseModel):
     sku_code: str = Field(..., min_length=1, max_length=100)
     price: float = Field(default=0, ge=0)
     uom: str = Field(default="pcs", max_length=50)
+    par_level: int = Field(default=0, ge=0)
+    reorder_point: int = Field(default=0, ge=0)
+    safety_stock: int = Field(default=0, ge=0)
+    lead_time_days: int = Field(default=0, ge=0)
+    max_stock_level: int = Field(default=0, ge=0)
+    location_zone: str = Field(default="", max_length=50)
+    location_aisle: str = Field(default="", max_length=50)
+    location_rack: str = Field(default="", max_length=50)
+    location_shelf: str = Field(default="", max_length=50)
+    location_level: str = Field(default="", max_length=50)
+    location_bin: str = Field(default="", max_length=50)
 
 
 class SkuCheckRequest(BaseModel):
@@ -61,6 +83,17 @@ class BulkProductItem(BaseModel):
     price: float = Field(default=0, ge=0)
     stock_at_warehouse: int = Field(default=0, ge=0)
     uom: str = Field(default="pcs", max_length=50)
+    par_level: int = Field(default=0, ge=0)
+    reorder_point: int = Field(default=0, ge=0)
+    safety_stock: int = Field(default=0, ge=0)
+    lead_time_days: int = Field(default=0, ge=0)
+    max_stock_level: int = Field(default=0, ge=0)
+    location_zone: str = Field(default="", max_length=50)
+    location_aisle: str = Field(default="", max_length=50)
+    location_rack: str = Field(default="", max_length=50)
+    location_shelf: str = Field(default="", max_length=50)
+    location_level: str = Field(default="", max_length=50)
+    location_bin: str = Field(default="", max_length=50)
 
 
 class BulkProductRequest(BaseModel):
@@ -86,7 +119,12 @@ def create_product_endpoint(body: ProductCreate, user_id: int = Depends(get_curr
     """Create a new product for the user's business."""
     biz_id = _get_user_business_id(user_id)
     try:
-        product = create_product(body.name, body.sku_code, biz_id, body.price, body.stock_at_warehouse, body.uom)
+        product = create_product(
+            body.name, body.sku_code, biz_id, body.price, body.stock_at_warehouse, body.uom,
+            body.par_level, body.reorder_point, body.safety_stock, body.lead_time_days, body.max_stock_level,
+            body.location_zone, body.location_aisle, body.location_rack,
+            body.location_shelf, body.location_level, body.location_bin,
+        )
         return product
     except Exception as e:
         if "unique" in str(e).lower() or "duplicate" in str(e).lower():
@@ -115,7 +153,12 @@ def update_product_endpoint(product_id: int, body: ProductUpdate, user_id: int =
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
     try:
-        result = update_product(product_id, biz_id, body.name, body.sku_code, body.price, body.uom)
+        result = update_product(
+            product_id, biz_id, body.name, body.sku_code, body.price, body.uom,
+            body.par_level, body.reorder_point, body.safety_stock, body.lead_time_days, body.max_stock_level,
+            body.location_zone, body.location_aisle, body.location_rack,
+            body.location_shelf, body.location_level, body.location_bin,
+        )
         if not result:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
@@ -129,6 +172,12 @@ def update_product_endpoint(product_id: int, body: ProductUpdate, user_id: int =
             changes.append({"field_name": "price", "old_value": str(existing["price"]), "new_value": str(body.price)})
         if existing.get("uom", "pcs") != body.uom:
             changes.append({"field_name": "uom", "old_value": existing.get("uom", "pcs"), "new_value": body.uom})
+        for field in ("par_level", "reorder_point", "safety_stock", "lead_time_days", "max_stock_level"):
+            if int(existing.get(field, 0)) != getattr(body, field):
+                changes.append({"field_name": field, "old_value": str(existing.get(field, 0)), "new_value": str(getattr(body, field))})
+        for field in ("location_zone", "location_aisle", "location_rack", "location_shelf", "location_level", "location_bin"):
+            if existing.get(field, "") != getattr(body, field):
+                changes.append({"field_name": field, "old_value": existing.get(field, ""), "new_value": getattr(body, field)})
 
         if changes:
             create_product_audit_entries(product_id, biz_id, user_id, changes)
@@ -167,7 +216,12 @@ def bulk_create_products(body: BulkProductRequest, user_id: int = Depends(get_cu
     results = []
     for item in body.products:
         try:
-            product = create_product(item.name, item.sku_code, biz_id, item.price, item.stock_at_warehouse, item.uom)
+            product = create_product(
+                item.name, item.sku_code, biz_id, item.price, item.stock_at_warehouse, item.uom,
+                item.par_level, item.reorder_point, item.safety_stock, item.lead_time_days, item.max_stock_level,
+                item.location_zone, item.location_aisle, item.location_rack,
+                item.location_shelf, item.location_level, item.location_bin,
+            )
             results.append({
                 "name": item.name,
                 "sku_code": item.sku_code,

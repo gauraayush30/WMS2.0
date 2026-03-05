@@ -604,16 +604,37 @@ def update_business(business_id: int, name: str, location: str | None) -> dict |
 
 # ── Product CRUD ─────────────────────────────────────────────────────────────
 
-def create_product(name: str, sku_code: str, business_id: int, price: float = 0, stock_at_warehouse: int = 0, uom: str = "pcs") -> dict:
-    query = text("""
-        INSERT INTO products (name, sku_code, business_id, price, stock_at_warehouse, uom)
-        VALUES (:name, :sku_code, :business_id, :price, :stock, :uom)
-        RETURNING id, name, sku_code, business_id, price, stock_at_warehouse, uom, created_at, updated_at
+PRODUCT_COLUMNS = (
+    "id, name, sku_code, business_id, price, stock_at_warehouse, uom, "
+    "par_level, reorder_point, safety_stock, lead_time_days, max_stock_level, "
+    "location_zone, location_aisle, location_rack, location_shelf, location_level, location_bin, "
+    "created_at, updated_at"
+)
+
+
+def create_product(name: str, sku_code: str, business_id: int, price: float = 0, stock_at_warehouse: int = 0, uom: str = "pcs",
+                   par_level: int = 0, reorder_point: int = 0, safety_stock: int = 0, lead_time_days: int = 0, max_stock_level: int = 0,
+                   location_zone: str = "", location_aisle: str = "", location_rack: str = "",
+                   location_shelf: str = "", location_level: str = "", location_bin: str = "") -> dict:
+    query = text(f"""
+        INSERT INTO products (name, sku_code, business_id, price, stock_at_warehouse, uom,
+                              par_level, reorder_point, safety_stock, lead_time_days, max_stock_level,
+                              location_zone, location_aisle, location_rack, location_shelf, location_level, location_bin)
+        VALUES (:name, :sku_code, :business_id, :price, :stock, :uom,
+                :par_level, :reorder_point, :safety_stock, :lead_time_days, :max_stock_level,
+                :location_zone, :location_aisle, :location_rack, :location_shelf, :location_level, :location_bin)
+        RETURNING {PRODUCT_COLUMNS}
     """)
     with engine.begin() as conn:
         row = conn.execute(query, {
             "name": name, "sku_code": sku_code, "business_id": business_id,
             "price": price, "stock": stock_at_warehouse, "uom": uom,
+            "par_level": par_level, "reorder_point": reorder_point,
+            "safety_stock": safety_stock, "lead_time_days": lead_time_days,
+            "max_stock_level": max_stock_level,
+            "location_zone": location_zone, "location_aisle": location_aisle,
+            "location_rack": location_rack, "location_shelf": location_shelf,
+            "location_level": location_level, "location_bin": location_bin,
         }).mappings().first()
     return dict(row)
 
@@ -627,8 +648,8 @@ def get_products_by_business(business_id: int, page: int = 1, per_page: int = 20
         WHERE business_id = :biz
           AND (name ILIKE :search OR sku_code ILIKE :search)
     """)
-    data_query = text("""
-        SELECT id, name, sku_code, business_id, price, stock_at_warehouse, uom, created_at, updated_at
+    data_query = text(f"""
+        SELECT {PRODUCT_COLUMNS}
         FROM products
         WHERE business_id = :biz
           AND (name ILIKE :search OR sku_code ILIKE :search)
@@ -652,8 +673,8 @@ def get_products_by_business(business_id: int, page: int = 1, per_page: int = 20
 
 
 def get_product_by_id(product_id: int, business_id: int) -> dict | None:
-    query = text("""
-        SELECT id, name, sku_code, business_id, price, stock_at_warehouse, uom, created_at, updated_at
+    query = text(f"""
+        SELECT {PRODUCT_COLUMNS}
         FROM products WHERE id = :id AND business_id = :biz
     """)
     with engine.connect() as conn:
@@ -661,16 +682,33 @@ def get_product_by_id(product_id: int, business_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def update_product(product_id: int, business_id: int, name: str, sku_code: str, price: float, uom: str = "pcs") -> dict | None:
-    query = text("""
-        UPDATE products SET name = :name, sku_code = :sku_code, price = :price, uom = :uom, updated_at = NOW()
+def update_product(product_id: int, business_id: int, name: str, sku_code: str, price: float, uom: str = "pcs",
+                   par_level: int = 0, reorder_point: int = 0, safety_stock: int = 0, lead_time_days: int = 0, max_stock_level: int = 0,
+                   location_zone: str = "", location_aisle: str = "", location_rack: str = "",
+                   location_shelf: str = "", location_level: str = "", location_bin: str = "") -> dict | None:
+    query = text(f"""
+        UPDATE products
+        SET name = :name, sku_code = :sku_code, price = :price, uom = :uom,
+            par_level = :par_level, reorder_point = :reorder_point,
+            safety_stock = :safety_stock, lead_time_days = :lead_time_days,
+            max_stock_level = :max_stock_level,
+            location_zone = :location_zone, location_aisle = :location_aisle,
+            location_rack = :location_rack, location_shelf = :location_shelf,
+            location_level = :location_level, location_bin = :location_bin,
+            updated_at = NOW()
         WHERE id = :id AND business_id = :biz
-        RETURNING id, name, sku_code, business_id, price, stock_at_warehouse, uom, created_at, updated_at
+        RETURNING {PRODUCT_COLUMNS}
     """)
     with engine.begin() as conn:
         row = conn.execute(query, {
             "id": product_id, "biz": business_id,
             "name": name, "sku_code": sku_code, "price": price, "uom": uom,
+            "par_level": par_level, "reorder_point": reorder_point,
+            "safety_stock": safety_stock, "lead_time_days": lead_time_days,
+            "max_stock_level": max_stock_level,
+            "location_zone": location_zone, "location_aisle": location_aisle,
+            "location_rack": location_rack, "location_shelf": location_shelf,
+            "location_level": location_level, "location_bin": location_bin,
         }).mappings().fetchone()
     return dict(row) if row else None
 
@@ -1285,3 +1323,145 @@ def check_pending_invite(from_business_id: int, to_user_id: int) -> bool:
     with engine.connect() as conn:
         row = conn.execute(query, {"biz": from_business_id, "uid": to_user_id}).fetchone()
     return row is not None
+
+
+# ── Delivery Locations CRUD ──────────────────────────────────────────────────
+
+def create_delivery_location(business_id: int, name: str, address: str = "",
+                             city: str = "", state: str = "", zip_code: str = "",
+                             contact_person: str = "", contact_phone: str = "",
+                             notes: str = "") -> dict:
+    query = text("""
+        INSERT INTO delivery_locations
+            (business_id, name, address, city, state, zip_code, contact_person, contact_phone, notes)
+        VALUES (:biz, :name, :address, :city, :state, :zip_code, :contact_person, :contact_phone, :notes)
+        RETURNING id, business_id, name, address, city, state, zip_code,
+                  contact_person, contact_phone, notes, is_active, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "biz": business_id, "name": name, "address": address,
+            "city": city, "state": state, "zip_code": zip_code,
+            "contact_person": contact_person, "contact_phone": contact_phone,
+            "notes": notes,
+        }).mappings().first()
+    return dict(row)
+
+
+def get_delivery_locations(business_id: int, include_inactive: bool = False) -> list[dict]:
+    if include_inactive:
+        query = text("""
+            SELECT id, business_id, name, address, city, state, zip_code,
+                   contact_person, contact_phone, notes, is_active, created_at, updated_at
+            FROM delivery_locations WHERE business_id = :biz
+            ORDER BY name
+        """)
+    else:
+        query = text("""
+            SELECT id, business_id, name, address, city, state, zip_code,
+                   contact_person, contact_phone, notes, is_active, created_at, updated_at
+            FROM delivery_locations WHERE business_id = :biz AND is_active = TRUE
+            ORDER BY name
+        """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_delivery_location_by_id(location_id: int, business_id: int) -> dict | None:
+    query = text("""
+        SELECT id, business_id, name, address, city, state, zip_code,
+               contact_person, contact_phone, notes, is_active, created_at, updated_at
+        FROM delivery_locations WHERE id = :id AND business_id = :biz
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"id": location_id, "biz": business_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def update_delivery_location(location_id: int, business_id: int, name: str,
+                             address: str = "", city: str = "", state: str = "",
+                             zip_code: str = "", contact_person: str = "",
+                             contact_phone: str = "", notes: str = "",
+                             is_active: bool = True) -> dict | None:
+    query = text("""
+        UPDATE delivery_locations
+        SET name = :name, address = :address, city = :city, state = :state,
+            zip_code = :zip_code, contact_person = :contact_person,
+            contact_phone = :contact_phone, notes = :notes,
+            is_active = :is_active, updated_at = NOW()
+        WHERE id = :id AND business_id = :biz
+        RETURNING id, business_id, name, address, city, state, zip_code,
+                  contact_person, contact_phone, notes, is_active, created_at, updated_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "id": location_id, "biz": business_id, "name": name,
+            "address": address, "city": city, "state": state,
+            "zip_code": zip_code, "contact_person": contact_person,
+            "contact_phone": contact_phone, "notes": notes,
+            "is_active": is_active,
+        }).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def delete_delivery_location(location_id: int, business_id: int) -> bool:
+    query = text("DELETE FROM delivery_locations WHERE id = :id AND business_id = :biz")
+    with engine.begin() as conn:
+        result = conn.execute(query, {"id": location_id, "biz": business_id})
+    return result.rowcount > 0
+
+
+# ── Dashboard helpers ────────────────────────────────────────────────────────
+
+def get_products_without_location(business_id: int) -> list[dict]:
+    """Return products that have no warehouse location set (all location fields empty)."""
+    query = text(f"""
+        SELECT {PRODUCT_COLUMNS}
+        FROM products
+        WHERE business_id = :biz
+          AND location_zone  = ''
+          AND location_aisle = ''
+          AND location_rack  = ''
+          AND location_shelf = ''
+          AND location_level = ''
+          AND location_bin   = ''
+        ORDER BY name
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_dashboard_stats(business_id: int) -> dict:
+    """Aggregate stats for the dashboard."""
+    queries = {
+        "total_products": text("""
+            SELECT COUNT(*)::int FROM products WHERE business_id = :biz
+        """),
+        "products_without_location": text("""
+            SELECT COUNT(*)::int FROM products
+            WHERE business_id = :biz
+              AND location_zone  = ''
+              AND location_aisle = ''
+              AND location_rack  = ''
+              AND location_shelf = ''
+              AND location_level = ''
+              AND location_bin   = ''
+        """),
+        "low_stock_products": text("""
+            SELECT COUNT(*)::int FROM products
+            WHERE business_id = :biz
+              AND reorder_point > 0
+              AND stock_at_warehouse <= reorder_point
+        """),
+        "out_of_stock_products": text("""
+            SELECT COUNT(*)::int FROM products
+            WHERE business_id = :biz AND stock_at_warehouse = 0
+        """),
+    }
+    stats = {}
+    with engine.connect() as conn:
+        for key, q in queries.items():
+            stats[key] = conn.execute(q, {"biz": business_id}).scalar() or 0
+    return stats

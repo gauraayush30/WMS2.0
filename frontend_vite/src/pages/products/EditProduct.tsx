@@ -10,6 +10,17 @@ interface Product {
   price: number;
   stock_at_warehouse: number;
   uom: string;
+  par_level: number;
+  reorder_point: number;
+  safety_stock: number;
+  lead_time_days: number;
+  max_stock_level: number;
+  location_zone: string;
+  location_aisle: string;
+  location_rack: string;
+  location_shelf: string;
+  location_level: string;
+  location_bin: string;
 }
 
 export default function EditProduct() {
@@ -23,6 +34,17 @@ export default function EditProduct() {
     sku_code: "",
     price: "0",
     uom: "pcs",
+    par_level: "0",
+    reorder_point: "0",
+    safety_stock: "0",
+    lead_time_days: "0",
+    max_stock_level: "0",
+    location_zone: "",
+    location_aisle: "",
+    location_rack: "",
+    location_shelf: "",
+    location_level: "",
+    location_bin: "",
   });
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState("");
@@ -40,6 +62,17 @@ export default function EditProduct() {
           sku_code: p.sku_code,
           price: String(p.price),
           uom: p.uom || "pcs",
+          par_level: String(p.par_level ?? 0),
+          reorder_point: String(p.reorder_point ?? 0),
+          safety_stock: String(p.safety_stock ?? 0),
+          lead_time_days: String(p.lead_time_days ?? 0),
+          max_stock_level: String(p.max_stock_level ?? 0),
+          location_zone: p.location_zone ?? "",
+          location_aisle: p.location_aisle ?? "",
+          location_rack: p.location_rack ?? "",
+          location_shelf: p.location_shelf ?? "",
+          location_level: p.location_level ?? "",
+          location_bin: p.location_bin ?? "",
         });
       })
       .catch((e) => setFormError(e.message))
@@ -63,6 +96,17 @@ export default function EditProduct() {
           sku_code: form.sku_code.trim(),
           price: parseFloat(form.price) || 0,
           uom: form.uom.trim() || "pcs",
+          par_level: parseInt(form.par_level) || 0,
+          reorder_point: parseInt(form.reorder_point) || 0,
+          safety_stock: parseInt(form.safety_stock) || 0,
+          lead_time_days: parseInt(form.lead_time_days) || 0,
+          max_stock_level: parseInt(form.max_stock_level) || 0,
+          location_zone: form.location_zone.trim(),
+          location_aisle: form.location_aisle.trim(),
+          location_rack: form.location_rack.trim(),
+          location_shelf: form.location_shelf.trim(),
+          location_level: form.location_level.trim(),
+          location_bin: form.location_bin.trim(),
         }),
       });
       if (!res.ok) {
@@ -141,6 +185,165 @@ export default function EditProduct() {
               />
             </div>
           </div>
+
+          {/* ── Inventory Management Fields ──────────────── */}
+          <h4
+            style={{
+              marginTop: 16,
+              marginBottom: 8,
+              color: "var(--text-secondary)",
+            }}
+          >
+            Inventory Management
+          </h4>
+          <div className="form-row">
+            <div className="form-group">
+              <label>PAR Level</label>
+              <input
+                type="number"
+                min="0"
+                value={form.par_level}
+                onChange={(e) =>
+                  setForm({ ...form, par_level: e.target.value })
+                }
+                title="Periodic Automatic Replenishment level"
+              />
+            </div>
+            <div className="form-group">
+              <label>Reorder Point</label>
+              <input
+                type="number"
+                min="0"
+                value={form.reorder_point}
+                onChange={(e) =>
+                  setForm({ ...form, reorder_point: e.target.value })
+                }
+                title="Stock level at which a new order should be placed"
+              />
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Safety Stock</label>
+              <input
+                type="number"
+                min="0"
+                value={form.safety_stock}
+                onChange={(e) =>
+                  setForm({ ...form, safety_stock: e.target.value })
+                }
+                title="Extra buffer stock to prevent stock-outs"
+              />
+            </div>
+            <div className="form-group">
+              <label>Lead Time (days)</label>
+              <input
+                type="number"
+                min="0"
+                value={form.lead_time_days}
+                onChange={(e) =>
+                  setForm({ ...form, lead_time_days: e.target.value })
+                }
+                title="Days to receive new stock after ordering"
+              />
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Max Stock Level</label>
+              <input
+                type="number"
+                min="0"
+                value={form.max_stock_level}
+                onChange={(e) =>
+                  setForm({ ...form, max_stock_level: e.target.value })
+                }
+                title="Maximum stock capacity"
+              />
+            </div>
+          </div>
+
+          {/* ── Warehouse Location Fields ─────────────── */}
+          <h4
+            style={{
+              marginTop: 16,
+              marginBottom: 8,
+              color: "var(--text-secondary)",
+            }}
+          >
+            Warehouse Location
+          </h4>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Zone</label>
+              <input
+                type="text"
+                placeholder="e.g. A, B, Cold"
+                value={form.location_zone}
+                onChange={(e) =>
+                  setForm({ ...form, location_zone: e.target.value })
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>Aisle</label>
+              <input
+                type="text"
+                placeholder="e.g. 1, 2, 3"
+                value={form.location_aisle}
+                onChange={(e) =>
+                  setForm({ ...form, location_aisle: e.target.value })
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>Rack</label>
+              <input
+                type="text"
+                placeholder="e.g. R1, R2"
+                value={form.location_rack}
+                onChange={(e) =>
+                  setForm({ ...form, location_rack: e.target.value })
+                }
+              />
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Shelf</label>
+              <input
+                type="text"
+                placeholder="e.g. S1, S2"
+                value={form.location_shelf}
+                onChange={(e) =>
+                  setForm({ ...form, location_shelf: e.target.value })
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>Level</label>
+              <input
+                type="text"
+                placeholder="e.g. 1, 2, 3, 4"
+                value={form.location_level}
+                onChange={(e) =>
+                  setForm({ ...form, location_level: e.target.value })
+                }
+              />
+            </div>
+            <div className="form-group">
+              <label>Bin / Pallet</label>
+              <input
+                type="text"
+                placeholder="e.g. P01, BIN-05"
+                value={form.location_bin}
+                onChange={(e) =>
+                  setForm({ ...form, location_bin: e.target.value })
+                }
+              />
+            </div>
+          </div>
+
           <div style={{ display: "flex", gap: 12 }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? "Saving..." : "Update Product"}

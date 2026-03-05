@@ -14,6 +14,7 @@ import InventoryHistoryPage from "./pages/inventory/InventoryHistoryPage";
 import BusinessPage from "./pages/BusinessPage";
 import BusinessDetailsPage from "./pages/business/BusinessDetailsPage";
 import InvitesPage from "./pages/business/InvitesPage";
+import DeliveryLocationsPage from "./pages/business/DeliveryLocationsPage";
 import UsersPage from "./pages/UsersPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
@@ -51,6 +52,10 @@ function AppInner() {
           <Route path="/business" element={<BusinessPage />} />
           <Route path="/business/details" element={<BusinessDetailsPage />} />
           <Route path="/business/invites" element={<InvitesPage />} />
+          <Route
+            path="/business/delivery-locations"
+            element={<DeliveryLocationsPage />}
+          />
           <Route path="/users" element={<UsersPage />} />
         </Route>
       </Routes>
