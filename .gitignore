@@ -27,3 +27,4 @@ yarn-error.log*
 venv
 __pycache__/
 *.pyc
+plan_for_ml.md

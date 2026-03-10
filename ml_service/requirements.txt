@@ -1,0 +1,12 @@
+fastapi==0.129.0
+uvicorn==0.40.0
+scikit-learn==1.8.0
+pandas==3.0.0
+numpy==2.4.2
+joblib==1.5.3
+holidays==0.40
+python-dotenv==1.2.1
+httpx==0.28.1
+SQLAlchemy==2.0.46
+psycopg2==2.9.11
+python-multipart==0.0.20
