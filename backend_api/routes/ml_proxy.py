@@ -1,0 +1,152 @@
+"""
+ML Proxy routes – forwards forecast/ML requests to the ML microservice
+while keeping authentication centralized in the main API.
+
+All endpoints live under /products/{product_id}/forecast/…
+"""
+
+import os
+
+import httpx
+from fastapi import APIRouter, HTTPException, status, Depends, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
+
+from auth import get_current_user_id
+from db import get_user_by_id
+
+router = APIRouter(prefix="/products/{product_id}/forecast", tags=["ML Forecast"])
+
+ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://127.0.0.1:8100")
+
+# Shared timeout config for ML service calls (training can be slow)
+_TIMEOUT = httpx.Timeout(timeout=120.0, connect=10.0)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _get_user_context(user_id: int) -> tuple[int, int]:
+    """Return (user_id, business_id) or raise 403."""
+    user = get_user_by_id(user_id)
+    if not user or not user.get("business_id"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must belong to a business to access this resource",
+        )
+    return user["id"], user["business_id"]
+
+
+async def _proxy_get(path: str, business_id: int, extra_params: dict | None = None):
+    """Forward a GET request to the ML service."""
+    params = {"business_id": business_id, **(extra_params or {})}
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.get(f"{ML_SERVICE_URL}{path}", params=params)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.json().get("detail", resp.text))
+    return resp.json()
+
+
+async def _proxy_post(path: str, business_id: int, user_id: int, extra_params: dict | None = None):
+    """Forward a POST request to the ML service."""
+    params = {"business_id": business_id, "user_id": user_id, **(extra_params or {})}
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(f"{ML_SERVICE_URL}{path}", params=params)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.json().get("detail", resp.text))
+    return resp.json()
+
+
+async def _proxy_delete(path: str, business_id: int):
+    """Forward a DELETE request to the ML service."""
+    params = {"business_id": business_id}
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.delete(f"{ML_SERVICE_URL}{path}", params=params)
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.json().get("detail", resp.text))
+    return resp.json()
+
+
+# ── Endpoints ────────────────────────────────────────────────────────────────
+
+@router.get("/status")
+async def forecast_status(product_id: int, user_id: int = Depends(get_current_user_id)):
+    """Check model status for a product."""
+    _, biz_id = _get_user_context(user_id)
+    return await _proxy_get(f"/status/{product_id}", biz_id)
+
+
+@router.get("/training-data")
+async def forecast_training_data(product_id: int, user_id: int = Depends(get_current_user_id)):
+    """Preview available training data."""
+    _, biz_id = _get_user_context(user_id)
+    return await _proxy_get(f"/training-data/{product_id}", biz_id)
+
+
+@router.get("/template")
+async def forecast_download_template(product_id: int, user_id: int = Depends(get_current_user_id)):
+    """Download CSV template for historical data upload."""
+    _, biz_id = _get_user_context(user_id)
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.get(
+            f"{ML_SERVICE_URL}/template/{product_id}",
+            params={"business_id": biz_id},
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail="Failed to generate template")
+
+    return StreamingResponse(
+        iter([resp.content]),
+        media_type=resp.headers.get("content-type", "text/csv"),
+        headers={
+            "Content-Disposition": resp.headers.get(
+                "content-disposition",
+                f'attachment; filename="history_template_{product_id}.csv"',
+            )
+        },
+    )
+
+
+@router.post("/upload")
+async def forecast_upload_history(
+    product_id: int,
+    file: UploadFile = File(...),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Upload CSV historical data for a product."""
+    uid, biz_id = _get_user_context(user_id)
+    contents = await file.read()
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(
+            f"{ML_SERVICE_URL}/upload/{product_id}",
+            params={"business_id": biz_id, "user_id": uid},
+            files={"file": (file.filename, contents, file.content_type or "text/csv")},
+        )
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.json().get("detail", resp.text))
+    return resp.json()
+
+
+@router.post("/train")
+async def forecast_train(product_id: int, user_id: int = Depends(get_current_user_id)):
+    """Trigger on-demand model training for a product."""
+    uid, biz_id = _get_user_context(user_id)
+    return await _proxy_post(f"/train/{product_id}", biz_id, uid)
+
+
+@router.get("/predict")
+async def forecast_predict(
+    product_id: int,
+    days: int = Query(30, ge=7, le=90),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Get demand forecast predictions."""
+    _, biz_id = _get_user_context(user_id)
+    return await _proxy_get(f"/predict/{product_id}", biz_id, {"days": days})
+
+
+@router.delete("/model")
+async def forecast_delete_model(product_id: int, user_id: int = Depends(get_current_user_id)):
+    """Delete trained model to retrain from scratch."""
+    _, biz_id = _get_user_context(user_id)
+    return await _proxy_delete(f"/model/{product_id}", biz_id)

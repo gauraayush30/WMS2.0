@@ -307,6 +307,55 @@ def migrate_products_table_v3() -> None:
     print("[migrations] products table v3 (warehouse locations) migration complete.")
 
 
+# ── ML service tables ────────────────────────────────────────────────────────
+
+def create_ml_uploaded_history_table() -> None:
+    """Stores CSV-uploaded historical inventory data for ML training."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS ml_uploaded_history (
+            id              SERIAL          PRIMARY KEY,
+            product_id      INTEGER         NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            business_id     INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            uploaded_by     INTEGER         REFERENCES users(id) ON DELETE SET NULL,
+            date            DATE            NOT NULL,
+            inbound_qty     INTEGER         NOT NULL DEFAULT 0,
+            outbound_qty    INTEGER         NOT NULL DEFAULT 0,
+            stock_level     INTEGER,
+            notes           TEXT            NOT NULL DEFAULT '',
+            created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            UNIQUE(product_id, business_id, date)
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] ml_uploaded_history table is ready.")
+
+
+def create_ml_model_metadata_table() -> None:
+    """Tracks trained ML models per product."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS ml_model_metadata (
+            id                  SERIAL          PRIMARY KEY,
+            product_id          INTEGER         NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            business_id         INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            model_path          VARCHAR(500)    NOT NULL,
+            trained_at          TIMESTAMPTZ     NOT NULL,
+            data_start_date     DATE,
+            data_end_date       DATE,
+            total_data_points   INTEGER,
+            cv_mae              DECIMAL(10, 2),
+            cv_mape             DECIMAL(10, 2),
+            features_used       TEXT[]          DEFAULT '{}',
+            status              VARCHAR(20)     NOT NULL DEFAULT 'ready',
+            created_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            UNIQUE(product_id, business_id)
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] ml_model_metadata table is ready.")
+
+
 def run_all() -> None:
     """Run all migrations in dependency order."""
     create_businesses_table()
@@ -324,4 +373,6 @@ def run_all() -> None:
     create_alert_settings_table()
     create_invites_table()
     create_delivery_locations_table()
+    create_ml_uploaded_history_table()
+    create_ml_model_metadata_table()
     print("[migrations] All migrations complete.")
