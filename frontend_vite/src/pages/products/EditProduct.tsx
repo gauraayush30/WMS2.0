@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAuth, API } from "../../context/AuthContext";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Save } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Alert } from "@/components/ui/alert";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
 
 interface Product {
   id: number;
@@ -121,243 +128,92 @@ export default function EditProduct() {
     }
   };
 
-  if (loading) return <div className="loading">Loading...</div>;
+  const set = (key: string, val: string) => setForm((p) => ({ ...p, [key]: val }));
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-10 w-52" />
+        <Skeleton className="h-96 w-full rounded-xl" />
+      </div>
+    );
+  }
 
   return (
-    <div className="page edit-product-page">
-      {/* Header */}
-      <div className="page-header">
-        <button
-          className="btn btn-secondary btn-sm"
-          onClick={() => navigate(`/products/${id}`)}
-        >
-          <ArrowLeft size={16} /> Back to Product
-        </button>
-        <h2 className="page-title" style={{ marginBottom: 0 }}>
-          Edit Product
-        </h2>
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <Button variant="outline" size="sm" onClick={() => navigate(`/products/${id}`)}>
+          <ArrowLeft size={14} /> Back to Product
+        </Button>
+        <h2 className="text-xl font-bold">Edit Product</h2>
       </div>
 
-      <div className="card ep-card">
-        {formError && <div className="alert alert-error">{formError}</div>}
-        {formSuccess && (
-          <div className="alert alert-success">{formSuccess}</div>
-        )}
-        <form onSubmit={handleSubmit} className="form-vertical">
-          <div className="form-row">
-            <div className="form-group">
-              <label>Product Name *</label>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>SKU Code *</label>
-              <input
-                type="text"
-                value={form.sku_code}
-                onChange={(e) => setForm({ ...form, sku_code: e.target.value })}
-                required
-              />
-            </div>
-          </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Price</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={form.price}
-                onChange={(e) => setForm({ ...form, price: e.target.value })}
-              />
-            </div>
-            <div className="form-group">
-              <label>Unit of Measurement</label>
-              <input
-                type="text"
-                placeholder="e.g. pcs, kg, litre"
-                value={form.uom}
-                onChange={(e) => setForm({ ...form, uom: e.target.value })}
-              />
-            </div>
-          </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Product Details</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {formError && <Alert variant="destructive" className="mb-4">{formError}</Alert>}
+          {formSuccess && <Alert variant="success" className="mb-4">{formSuccess}</Alert>}
 
-          {/* ── Inventory Management Fields ──────────────── */}
-          <h4
-            style={{
-              marginTop: 16,
-              marginBottom: 8,
-              color: "var(--text-secondary)",
-            }}
-          >
-            Inventory Management
-          </h4>
-          <div className="form-row">
-            <div className="form-group">
-              <label>PAR Level</label>
-              <input
-                type="number"
-                min="0"
-                value={form.par_level}
-                onChange={(e) =>
-                  setForm({ ...form, par_level: e.target.value })
-                }
-                title="Periodic Automatic Replenishment level"
-              />
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Product Name *</Label>
+                <Input value={form.name} onChange={(e) => set("name", e.target.value)} required />
+              </div>
+              <div className="space-y-1.5">
+                <Label>SKU Code *</Label>
+                <Input value={form.sku_code} onChange={(e) => set("sku_code", e.target.value)} required />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Price</Label>
+                <Input type="number" step="0.01" min="0" value={form.price} onChange={(e) => set("price", e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Unit of Measurement</Label>
+                <Input value={form.uom} onChange={(e) => set("uom", e.target.value)} />
+              </div>
             </div>
-            <div className="form-group">
-              <label>Reorder Point</label>
-              <input
-                type="number"
-                min="0"
-                value={form.reorder_point}
-                onChange={(e) =>
-                  setForm({ ...form, reorder_point: e.target.value })
-                }
-                title="Stock level at which a new order should be placed"
-              />
-            </div>
-          </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Safety Stock</label>
-              <input
-                type="number"
-                min="0"
-                value={form.safety_stock}
-                onChange={(e) =>
-                  setForm({ ...form, safety_stock: e.target.value })
-                }
-                title="Extra buffer stock to prevent stock-outs"
-              />
-            </div>
-            <div className="form-group">
-              <label>Lead Time (days)</label>
-              <input
-                type="number"
-                min="0"
-                value={form.lead_time_days}
-                onChange={(e) =>
-                  setForm({ ...form, lead_time_days: e.target.value })
-                }
-                title="Days to receive new stock after ordering"
-              />
-            </div>
-          </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Max Stock Level</label>
-              <input
-                type="number"
-                min="0"
-                value={form.max_stock_level}
-                onChange={(e) =>
-                  setForm({ ...form, max_stock_level: e.target.value })
-                }
-                title="Maximum stock capacity"
-              />
-            </div>
-          </div>
 
-          {/* ── Warehouse Location Fields ─────────────── */}
-          <h4
-            style={{
-              marginTop: 16,
-              marginBottom: 8,
-              color: "var(--text-secondary)",
-            }}
-          >
-            Warehouse Location
-          </h4>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Zone</label>
-              <input
-                type="text"
-                placeholder="e.g. A, B, Cold"
-                value={form.location_zone}
-                onChange={(e) =>
-                  setForm({ ...form, location_zone: e.target.value })
-                }
-              />
-            </div>
-            <div className="form-group">
-              <label>Aisle</label>
-              <input
-                type="text"
-                placeholder="e.g. 1, 2, 3"
-                value={form.location_aisle}
-                onChange={(e) =>
-                  setForm({ ...form, location_aisle: e.target.value })
-                }
-              />
-            </div>
-            <div className="form-group">
-              <label>Rack</label>
-              <input
-                type="text"
-                placeholder="e.g. R1, R2"
-                value={form.location_rack}
-                onChange={(e) =>
-                  setForm({ ...form, location_rack: e.target.value })
-                }
-              />
-            </div>
-          </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Shelf</label>
-              <input
-                type="text"
-                placeholder="e.g. S1, S2"
-                value={form.location_shelf}
-                onChange={(e) =>
-                  setForm({ ...form, location_shelf: e.target.value })
-                }
-              />
-            </div>
-            <div className="form-group">
-              <label>Level</label>
-              <input
-                type="text"
-                placeholder="e.g. 1, 2, 3, 4"
-                value={form.location_level}
-                onChange={(e) =>
-                  setForm({ ...form, location_level: e.target.value })
-                }
-              />
-            </div>
-            <div className="form-group">
-              <label>Bin / Pallet</label>
-              <input
-                type="text"
-                placeholder="e.g. P01, BIN-05"
-                value={form.location_bin}
-                onChange={(e) =>
-                  setForm({ ...form, location_bin: e.target.value })
-                }
-              />
-            </div>
-          </div>
+            <Separator />
 
-          <div style={{ display: "flex", gap: 12 }}>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? "Saving..." : "Update Product"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => navigate(`/products/${id}`)}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      </div>
+            <div>
+              <h4 className="text-sm font-semibold text-muted-foreground mb-3">Inventory Management</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="space-y-1.5"><Label>PAR Level</Label><Input type="number" min="0" value={form.par_level} onChange={(e) => set("par_level", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Reorder Point</Label><Input type="number" min="0" value={form.reorder_point} onChange={(e) => set("reorder_point", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Safety Stock</Label><Input type="number" min="0" value={form.safety_stock} onChange={(e) => set("safety_stock", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Lead Time (days)</Label><Input type="number" min="0" value={form.lead_time_days} onChange={(e) => set("lead_time_days", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Max Stock Level</Label><Input type="number" min="0" value={form.max_stock_level} onChange={(e) => set("max_stock_level", e.target.value)} /></div>
+              </div>
+            </div>
+
+            <Separator />
+
+            <div>
+              <h4 className="text-sm font-semibold text-muted-foreground mb-3">Warehouse Location</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                <div className="space-y-1.5"><Label>Zone</Label><Input value={form.location_zone} onChange={(e) => set("location_zone", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Aisle</Label><Input value={form.location_aisle} onChange={(e) => set("location_aisle", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Rack</Label><Input value={form.location_rack} onChange={(e) => set("location_rack", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Shelf</Label><Input value={form.location_shelf} onChange={(e) => set("location_shelf", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Level</Label><Input value={form.location_level} onChange={(e) => set("location_level", e.target.value)} /></div>
+                <div className="space-y-1.5"><Label>Bin / Pallet</Label><Input value={form.location_bin} onChange={(e) => set("location_bin", e.target.value)} /></div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <Button type="submit" disabled={saving}>
+                <Save size={14} /> {saving ? "Saving..." : "Update Product"}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => navigate(`/products/${id}`)}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

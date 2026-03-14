@@ -2,6 +2,12 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth, API } from "../../context/AuthContext";
 import { ArrowLeft, Package } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface ProductStock {
   id: number;
@@ -35,8 +41,11 @@ export default function InventoryOverviewPage() {
           setProducts(data.products || []);
           setTotalPages(data.total_pages || 0);
         }
-      } catch (err) {
-        console.error(err);
+      } catch {
+        if (!cancelled) {
+          setProducts([]);
+          setTotalPages(0);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -48,112 +57,88 @@ export default function InventoryOverviewPage() {
     };
   }, [authFetch, page, search]);
 
-  const getStockClass = (stock: number) => {
-    if (stock === 0) return "product-tile--danger";
-    if (stock <= 10) return "product-tile--warning";
-    return "product-tile--ok";
+  const stockVariant = (stock: number) => {
+    if (stock === 0) return "destructive" as const;
+    if (stock <= 10) return "warning" as const;
+    return "success" as const;
   };
 
   return (
-    <div className="page inv-page">
-      <div className="page-header">
-        <button
-          className="btn btn-secondary btn-sm"
-          onClick={() => navigate("/inventory")}
-        >
-          <ArrowLeft size={16} /> Back
-        </button>
-        <h2 className="page-title">Inventory Overview</h2>
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <Button variant="outline" size="sm" onClick={() => navigate("/inventory")}>
+          <ArrowLeft size={14} /> Back
+        </Button>
+        <h2 className="text-xl font-bold">Inventory Overview</h2>
       </div>
 
-      <div className="section-header">
-        <h3>All Products</h3>
-        <input
-          type="text"
-          className="search-input"
-          placeholder="Search products..."
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(1);
-          }}
-        />
-      </div>
+      <Card>
+        <CardContent className="p-4 flex items-center justify-between gap-3 flex-wrap">
+          <h3 className="text-sm font-semibold">All Products</h3>
+          <Input
+            className="w-full sm:w-72"
+            placeholder="Search products..."
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+          />
+        </CardContent>
+      </Card>
 
       {loading ? (
-        <div className="loading">Loading...</div>
-      ) : products.length === 0 ? (
-        <div className="empty-state">
-          <Package size={48} />
-          <p>No products found.</p>
+        <div className="space-y-3">
+          {[...Array(6)].map((_, i) => (
+            <Skeleton key={i} className="h-10 rounded-lg" />
+          ))}
         </div>
+      ) : products.length === 0 ? (
+        <Card>
+          <CardContent className="p-10 text-center text-muted-foreground">
+            <Package size={38} className="mx-auto mb-2 opacity-60" />
+            <p>No products found.</p>
+          </CardContent>
+        </Card>
       ) : (
-        <>
-          <div className="inv-list-table-wrapper">
-            <table className="inv-list-table">
-              <thead>
-                <tr>
-                  <th>Product Name</th>
-                  <th>SKU</th>
-                  <th className="text-right">Stock</th>
-                  <th>UOM</th>
-                  <th className="text-right">Price</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((p) => (
-                  <tr key={p.id} className="inv-list-row">
-                    <td className="inv-list-name">{p.name}</td>
-                    <td>
-                      <span className="inv-list-sku">{p.sku_code}</span>
-                    </td>
-                    <td className="text-right">
-                      <span className="inv-list-stock">
-                        {p.stock_at_warehouse}
-                      </span>
-                    </td>
-                    <td>{p.uom || "pcs"}</td>
-                    <td className="text-right inv-list-price">
-                      ₹{Number(p.price).toFixed(2)}
-                    </td>
-                    <td>
-                      <span
-                        className={`inv-list-badge ${getStockClass(p.stock_at_warehouse)}`}
-                      >
-                        {p.stock_at_warehouse === 0
-                          ? "Out of Stock"
-                          : p.stock_at_warehouse <= 10
-                            ? "Low Stock"
-                            : "In Stock"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Product Name</TableHead>
+                <TableHead>SKU</TableHead>
+                <TableHead className="text-right">Stock</TableHead>
+                <TableHead>UOM</TableHead>
+                <TableHead className="text-right">Price</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {products.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell className="font-medium text-sm">{p.name}</TableCell>
+                  <TableCell><code className="text-xs">{p.sku_code}</code></TableCell>
+                  <TableCell className="text-right text-sm">{p.stock_at_warehouse}</TableCell>
+                  <TableCell className="text-sm">{p.uom || "pcs"}</TableCell>
+                  <TableCell className="text-right text-sm">₹{Number(p.price).toFixed(2)}</TableCell>
+                  <TableCell>
+                    <Badge variant={stockVariant(p.stock_at_warehouse)}>
+                      {p.stock_at_warehouse === 0 ? "Out of Stock" : p.stock_at_warehouse <= 10 ? "Low Stock" : "In Stock"}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
 
-          {totalPages > 1 && (
-            <div className="pagination">
-              <button
-                disabled={page <= 1}
-                onClick={() => setPage((p) => p - 1)}
-              >
-                Previous
-              </button>
-              <span>
-                Page {page} of {totalPages}
-              </span>
-              <button
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => p + 1)}
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </>
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
+          <span className="text-sm text-muted-foreground">Page {page} of {totalPages}</span>
+          <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+        </div>
       )}
     </div>
   );

@@ -12,8 +12,25 @@ import {
   AlertTriangle,
   Trash2,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Alert } from "@/components/ui/alert";
+import { Separator } from "@/components/ui/separator";
+import { motion } from "framer-motion";
 
-/* ── Types ──────────────────────────────────────────────────── */
+/* ── Types ──────────────────────────────────────────────── */
 interface CsvRow {
   row: number;
   name: string;
@@ -32,7 +49,6 @@ interface BulkResultItem {
   message?: string;
 }
 
-/* ── Constants ──────────────────────────────────────────────── */
 const SAMPLE_CSV = `name,sku_code,price,stock_at_warehouse,uom
 Widget Alpha,SKU-001,29.99,100,pcs
 Widget Beta,SKU-002,14.50,250,kg
@@ -42,7 +58,7 @@ export default function CreateProduct() {
   const { authFetch } = useAuth();
   const navigate = useNavigate();
 
-  /* ── Single product form state ────────────────────────────── */
+  /* ── Single product form state ────────────────── */
   const [form, setForm] = useState({
     name: "",
     sku_code: "",
@@ -65,8 +81,7 @@ export default function CreateProduct() {
   const [formSuccess, setFormSuccess] = useState("");
   const [saving, setSaving] = useState(false);
 
-  /* ── Bulk CSV state ───────────────────────────────────────── */
-  const [activeTab, setActiveTab] = useState<"single" | "bulk">("single");
+  /* ── Bulk CSV state ───────────────────────────── */
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
   const [bulkResults, setBulkResults] = useState<BulkResultItem[]>([]);
@@ -74,7 +89,7 @@ export default function CreateProduct() {
   const [bulkUploading, setBulkUploading] = useState(false);
   const [fileName, setFileName] = useState("");
 
-  /* ── Handlers: single product ─────────────────────────────── */
+  /* ── Single product submit ────────────────────── */
   const handleSingleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
@@ -136,7 +151,7 @@ export default function CreateProduct() {
     }
   };
 
-  /* ── Handlers: CSV ────────────────────────────────────────── */
+  /* ── CSV Handlers ─────────────────────────────── */
   const downloadSample = () => {
     const blob = new Blob([SAMPLE_CSV], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -153,7 +168,6 @@ export default function CreateProduct() {
       .map((l) => l.trim())
       .filter(Boolean);
     if (lines.length < 2) return [];
-
     const header = lines[0]
       .toLowerCase()
       .split(",")
@@ -163,11 +177,8 @@ export default function CreateProduct() {
     const priceIdx = header.indexOf("price");
     const stockIdx = header.indexOf("stock_at_warehouse");
     const uomIdx = header.indexOf("uom");
-
     if (nameIdx === -1 || skuIdx === -1) {
-      setBulkError(
-        'CSV must have "name" and "sku_code" columns. Download the sample for reference.',
-      );
+      setBulkError('CSV must have "name" and "sku_code" columns.');
       return [];
     }
 
@@ -181,7 +192,6 @@ export default function CreateProduct() {
       const stock = stockIdx !== -1 ? cols[stockIdx] || "0" : "0";
       const uom = uomIdx !== -1 ? cols[uomIdx] || "pcs" : "pcs";
       const errors: string[] = [];
-
       if (!name) errors.push("Name is required");
       if (!sku_code) errors.push("SKU Code is required");
       if (priceIdx !== -1 && price && isNaN(Number(price)))
@@ -192,7 +202,6 @@ export default function CreateProduct() {
         errors.push("Stock must be a number");
       if (stockIdx !== -1 && Number(stock) < 0)
         errors.push("Stock cannot be negative");
-
       if (sku_code) allSkus.push(sku_code);
       rows.push({
         row: i + 1,
@@ -205,7 +214,6 @@ export default function CreateProduct() {
       });
     }
 
-    // Check for duplicate SKUs within CSV
     const skuMap = new Map<string, number[]>();
     rows.forEach((r) => {
       if (r.sku_code) {
@@ -215,16 +223,12 @@ export default function CreateProduct() {
       }
     });
     skuMap.forEach((rowNums, sku) => {
-      if (rowNums.length > 1) {
+      if (rowNums.length > 1)
         rows
           .filter((r) => r.sku_code.toLowerCase() === sku)
-          .forEach((r) =>
-            r.errors.push(`Duplicate SKU "${r.sku_code}" in CSV`),
-          );
-      }
+          .forEach((r) => r.errors.push(`Duplicate SKU`));
     });
 
-    // Check which SKUs already exist in the database
     if (allSkus.length > 0) {
       try {
         const res = await authFetch(`${API}/products/check-skus`, {
@@ -237,16 +241,14 @@ export default function CreateProduct() {
             (data.existing as string[]).map((s) => s.toLowerCase()),
           );
           rows.forEach((r) => {
-            if (r.sku_code && existingSet.has(r.sku_code.toLowerCase())) {
-              r.errors.push("SKU Code already exists in database");
-            }
+            if (r.sku_code && existingSet.has(r.sku_code.toLowerCase()))
+              r.errors.push("SKU exists in database");
           });
         }
       } catch {
-        // If the check fails, let the server-side catch it during creation
+        /* server will catch during creation */
       }
     }
-
     return rows;
   };
 
@@ -255,12 +257,10 @@ export default function CreateProduct() {
     setBulkResults([]);
     const file = e.target.files?.[0];
     if (!file) return;
-
     if (!file.name.endsWith(".csv")) {
       setBulkError("Please upload a .csv file");
       return;
     }
-
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = async (ev) => {
@@ -269,26 +269,21 @@ export default function CreateProduct() {
       setCsvRows(rows);
     };
     reader.readAsText(file);
-    // Reset so user can re-upload the same file
     e.target.value = "";
   };
 
-  const removeRow = (rowNum: number) => {
+  const removeRow = (rowNum: number) =>
     setCsvRows((prev) => prev.filter((r) => r.row !== rowNum));
-  };
 
   const handleBulkUpload = async () => {
     if (csvRows.length === 0) return;
-    const hasErrors = csvRows.some((r) => r.errors.length > 0);
-    if (hasErrors) {
+    if (csvRows.some((r) => r.errors.length > 0)) {
       setBulkError("Fix all validation errors before uploading");
       return;
     }
-
     setBulkUploading(true);
     setBulkError("");
     setBulkResults([]);
-
     try {
       const products = csvRows.map((r) => ({
         name: r.name,
@@ -297,24 +292,22 @@ export default function CreateProduct() {
         stock_at_warehouse: parseInt(r.stock_at_warehouse) || 0,
         uom: r.uom || "pcs",
       }));
-
       const res = await authFetch(`${API}/products/bulk`, {
         method: "POST",
         body: JSON.stringify({ products }),
       });
-
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Bulk upload failed");
       }
-
       const data = await res.json();
       setBulkResults(data.results || []);
-      // Clear csvRows on success
-      const allCreated = (data.results || []).every(
-        (r: BulkResultItem) => r.status === "created",
-      );
-      if (allCreated) setCsvRows([]);
+      if (
+        (data.results || []).every(
+          (r: BulkResultItem) => r.status === "created",
+        )
+      )
+        setCsvRows([]);
     } catch (err: unknown) {
       setBulkError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -325,491 +318,529 @@ export default function CreateProduct() {
   const validCount = csvRows.filter((r) => r.errors.length === 0).length;
   const errorCount = csvRows.filter((r) => r.errors.length > 0).length;
 
-  /* ── Render ───────────────────────────────────────────────── */
+  const set = (key: string, val: string) =>
+    setForm((p) => ({ ...p, [key]: val }));
+
+  /* ── Render ───────────────────────────────────── */
   return (
-    <div className="page create-product-page">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="page-header">
-        <button
-          className="btn btn-secondary btn-sm"
+      <div className="flex items-center gap-3">
+        <Button
+          variant="outline"
+          size="sm"
           onClick={() => navigate("/products")}
         >
-          <ArrowLeft size={16} /> Back
-        </button>
-        <h2 className="page-title" style={{ marginBottom: 0 }}>
-          Add Products
-        </h2>
+          <ArrowLeft size={14} /> Back
+        </Button>
+        <h2 className="text-xl font-bold">Add Products</h2>
       </div>
 
-      {/* Tab switcher */}
-      <div className="cp-tabs">
-        <button
-          className={`cp-tab ${activeTab === "single" ? "cp-tab--active" : ""}`}
-          onClick={() => setActiveTab("single")}
-        >
-          <Plus size={16} /> Single Product
-        </button>
-        <button
-          className={`cp-tab ${activeTab === "bulk" ? "cp-tab--active" : ""}`}
-          onClick={() => setActiveTab("bulk")}
-        >
-          <Upload size={16} /> Bulk Upload (CSV)
-        </button>
-      </div>
+      <Tabs defaultValue="single">
+        <TabsList>
+          <TabsTrigger value="single">
+            <Plus size={14} className="mr-1.5" /> Single Product
+          </TabsTrigger>
+          <TabsTrigger value="bulk">
+            <Upload size={14} className="mr-1.5" /> Bulk Upload (CSV)
+          </TabsTrigger>
+        </TabsList>
 
-      {/* ── Single Product Tab ──────────────────────────────── */}
-      {activeTab === "single" && (
-        <div className="card cp-card">
-          <h3 className="cp-card-title">Create a Product</h3>
-          {formError && <div className="alert alert-error">{formError}</div>}
-          {formSuccess && (
-            <div className="alert alert-success">{formSuccess}</div>
-          )}
-          <form onSubmit={handleSingleSubmit} className="form-vertical">
-            <div className="form-row">
-              <div className="form-group">
-                <label>Product Name *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Widget Alpha"
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label>SKU Code *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. SKU-001"
-                  value={form.sku_code}
-                  onChange={(e) =>
-                    setForm({ ...form, sku_code: e.target.value })
-                  }
-                  required
-                />
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Price</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={form.price}
-                  onChange={(e) => setForm({ ...form, price: e.target.value })}
-                />
-              </div>
-              <div className="form-group">
-                <label>Initial Stock</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={form.stock_at_warehouse}
-                  onChange={(e) =>
-                    setForm({ ...form, stock_at_warehouse: e.target.value })
-                  }
-                />
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Unit of Measurement</label>
-                <input
-                  type="text"
-                  placeholder="e.g. pcs, kg, litre"
-                  value={form.uom}
-                  onChange={(e) => setForm({ ...form, uom: e.target.value })}
-                />
-              </div>
-            </div>
+        {/* ── Single Product ────────────────────── */}
+        <TabsContent value="single">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            <Card>
+              <CardHeader>
+                <CardTitle>Create a Product</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {formError && (
+                  <Alert variant="destructive" className="mb-4">
+                    {formError}
+                  </Alert>
+                )}
+                {formSuccess && (
+                  <Alert variant="success" className="mb-4">
+                    {formSuccess}
+                  </Alert>
+                )}
 
-            {/* ── Inventory Management Fields ──────────────── */}
-            <h4
-              style={{
-                marginTop: 16,
-                marginBottom: 8,
-                color: "var(--text-secondary)",
-              }}
-            >
-              Inventory Management
-            </h4>
-            <div className="form-row">
-              <div className="form-group">
-                <label>PAR Level</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={form.par_level}
-                  onChange={(e) =>
-                    setForm({ ...form, par_level: e.target.value })
-                  }
-                  title="Periodic Automatic Replenishment level — ideal stock to maintain"
-                />
-              </div>
-              <div className="form-group">
-                <label>Reorder Point</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={form.reorder_point}
-                  onChange={(e) =>
-                    setForm({ ...form, reorder_point: e.target.value })
-                  }
-                  title="Stock level at which a new order should be placed"
-                />
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Safety Stock</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={form.safety_stock}
-                  onChange={(e) =>
-                    setForm({ ...form, safety_stock: e.target.value })
-                  }
-                  title="Extra buffer stock to prevent stock-outs"
-                />
-              </div>
-              <div className="form-group">
-                <label>Lead Time (days)</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={form.lead_time_days}
-                  onChange={(e) =>
-                    setForm({ ...form, lead_time_days: e.target.value })
-                  }
-                  title="Number of days it takes to receive new stock after ordering"
-                />
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Max Stock Level</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={form.max_stock_level}
-                  onChange={(e) =>
-                    setForm({ ...form, max_stock_level: e.target.value })
-                  }
-                  title="Maximum stock capacity for this product"
-                />
-              </div>
-            </div>
+                <form onSubmit={handleSingleSubmit} className="space-y-6">
+                  {/* Basic Info */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="name">Product Name *</Label>
+                      <Input
+                        id="name"
+                        placeholder="e.g. Widget Alpha"
+                        value={form.name}
+                        onChange={(e) => set("name", e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="sku">SKU Code *</Label>
+                      <Input
+                        id="sku"
+                        placeholder="e.g. SKU-001"
+                        value={form.sku_code}
+                        onChange={(e) => set("sku_code", e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="price">Price</Label>
+                      <Input
+                        id="price"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={form.price}
+                        onChange={(e) => set("price", e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="stock">Initial Stock</Label>
+                      <Input
+                        id="stock"
+                        type="number"
+                        min="0"
+                        value={form.stock_at_warehouse}
+                        onChange={(e) =>
+                          set("stock_at_warehouse", e.target.value)
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="uom">Unit of Measurement</Label>
+                      <Input
+                        id="uom"
+                        placeholder="e.g. pcs, kg, litre"
+                        value={form.uom}
+                        onChange={(e) => set("uom", e.target.value)}
+                      />
+                    </div>
+                  </div>
 
-            {/* ── Warehouse Location Fields ─────────────── */}
-            <h4
-              style={{
-                marginTop: 16,
-                marginBottom: 8,
-                color: "var(--text-secondary)",
-              }}
-            >
-              Warehouse Location
-            </h4>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Zone</label>
-                <input
-                  type="text"
-                  placeholder="e.g. A, B, Cold"
-                  value={form.location_zone}
-                  onChange={(e) =>
-                    setForm({ ...form, location_zone: e.target.value })
-                  }
-                />
-              </div>
-              <div className="form-group">
-                <label>Aisle</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 1, 2, 3"
-                  value={form.location_aisle}
-                  onChange={(e) =>
-                    setForm({ ...form, location_aisle: e.target.value })
-                  }
-                />
-              </div>
-              <div className="form-group">
-                <label>Rack</label>
-                <input
-                  type="text"
-                  placeholder="e.g. R1, R2"
-                  value={form.location_rack}
-                  onChange={(e) =>
-                    setForm({ ...form, location_rack: e.target.value })
-                  }
-                />
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label>Shelf</label>
-                <input
-                  type="text"
-                  placeholder="e.g. S1, S2"
-                  value={form.location_shelf}
-                  onChange={(e) =>
-                    setForm({ ...form, location_shelf: e.target.value })
-                  }
-                />
-              </div>
-              <div className="form-group">
-                <label>Level</label>
-                <input
-                  type="text"
-                  placeholder="e.g. 1, 2, 3, 4"
-                  value={form.location_level}
-                  onChange={(e) =>
-                    setForm({ ...form, location_level: e.target.value })
-                  }
-                />
-              </div>
-              <div className="form-group">
-                <label>Bin / Pallet</label>
-                <input
-                  type="text"
-                  placeholder="e.g. P01, BIN-05"
-                  value={form.location_bin}
-                  onChange={(e) =>
-                    setForm({ ...form, location_bin: e.target.value })
-                  }
-                />
-              </div>
-            </div>
+                  <Separator />
 
-            <div style={{ display: "flex", gap: 12 }}>
-          </form>
-        </div>
-      )}
+                  {/* Inventory Management */}
+                  <div>
+                    <h4 className="text-sm font-semibold text-muted-foreground mb-3">
+                      Inventory Management
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <div className="space-y-1.5">
+                        <Label>PAR Level</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          value={form.par_level}
+                          onChange={(e) => set("par_level", e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Reorder Point</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          value={form.reorder_point}
+                          onChange={(e) => set("reorder_point", e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Safety Stock</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          value={form.safety_stock}
+                          onChange={(e) => set("safety_stock", e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Lead Time (days)</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          value={form.lead_time_days}
+                          onChange={(e) =>
+                            set("lead_time_days", e.target.value)
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Max Stock Level</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          value={form.max_stock_level}
+                          onChange={(e) =>
+                            set("max_stock_level", e.target.value)
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
 
-      {/* ── Bulk Upload Tab ─────────────────────────────────── */}
-      {activeTab === "bulk" && (
-        <div className="cp-bulk">
-          {/* Step 1: Download sample */}
-          <div className="card cp-card">
-            <div className="cp-step-header">
-              <span className="cp-step-num">1</span>
-              <div>
-                <h3 className="cp-card-title" style={{ marginBottom: 2 }}>
-                  Download Sample CSV
-                </h3>
-                <p className="cp-step-desc">
-                  Download the template, fill in your product data, then upload
-                  it below.
-                </p>
-              </div>
-            </div>
-            <button className="btn btn-secondary" onClick={downloadSample}>
-              <Download size={16} /> Download Template
-            </button>
-            <div className="cp-csv-format">
-              <p className="cp-csv-format-title">
-                <FileSpreadsheet size={14} /> Expected columns:
-              </p>
-              <div className="cp-csv-cols">
-                <span className="cp-csv-col cp-csv-col--req">name *</span>
-                <span className="cp-csv-col cp-csv-col--req">sku_code *</span>
-                <span className="cp-csv-col">price</span>
-                <span className="cp-csv-col">stock_at_warehouse</span>
-                <span className="cp-csv-col">uom</span>
-              </div>
-            </div>
-          </div>
+                  <Separator />
 
-          {/* Step 2: Upload */}
-          <div className="card cp-card">
-            <div className="cp-step-header">
-              <span className="cp-step-num">2</span>
-              <div>
-                <h3 className="cp-card-title" style={{ marginBottom: 2 }}>
-                  Upload Your CSV
-                </h3>
-                <p className="cp-step-desc">
-                  Select your filled CSV file. We'll validate it before creating
-                  products.
-                </p>
-              </div>
-            </div>
+                  {/* Warehouse Location */}
+                  <div>
+                    <h4 className="text-sm font-semibold text-muted-foreground mb-3">
+                      Warehouse Location
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                      <div className="space-y-1.5">
+                        <Label>Zone</Label>
+                        <Input
+                          placeholder="e.g. A, B, Cold"
+                          value={form.location_zone}
+                          onChange={(e) => set("location_zone", e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Aisle</Label>
+                        <Input
+                          placeholder="e.g. 1, 2, 3"
+                          value={form.location_aisle}
+                          onChange={(e) =>
+                            set("location_aisle", e.target.value)
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Rack</Label>
+                        <Input
+                          placeholder="e.g. R1, R2"
+                          value={form.location_rack}
+                          onChange={(e) => set("location_rack", e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Shelf</Label>
+                        <Input
+                          placeholder="e.g. S1, S2"
+                          value={form.location_shelf}
+                          onChange={(e) =>
+                            set("location_shelf", e.target.value)
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Level</Label>
+                        <Input
+                          placeholder="e.g. 1, 2, 3, 4"
+                          value={form.location_level}
+                          onChange={(e) =>
+                            set("location_level", e.target.value)
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Bin / Pallet</Label>
+                        <Input
+                          placeholder="e.g. P01, BIN-05"
+                          value={form.location_bin}
+                          onChange={(e) => set("location_bin", e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </div>
 
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv"
-              style={{ display: "none" }}
-              onChange={handleFileChange}
-            />
+                  <div className="flex gap-3 pt-2">
+                    <Button type="submit" disabled={saving}>
+                      {saving ? "Saving..." : "Create Product"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => navigate("/products")}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          </motion.div>
+        </TabsContent>
 
-            <button
-              className="btn btn-primary"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Upload size={16} /> Choose CSV File
-            </button>
-
-            {fileName && (
-              <span className="cp-file-name">
-                <FileSpreadsheet size={14} /> {fileName}
-              </span>
-            )}
-
-            {bulkError && (
-              <div className="alert alert-error" style={{ marginTop: 12 }}>
-                {bulkError}
-              </div>
-            )}
-          </div>
-
-          {/* Step 3: Preview & Validate */}
-          {csvRows.length > 0 && (
-            <div className="card cp-card">
-              <div className="cp-step-header">
-                <span className="cp-step-num">3</span>
-                <div>
-                  <h3 className="cp-card-title" style={{ marginBottom: 2 }}>
-                    Preview & Validate
-                  </h3>
-                  <p className="cp-step-desc">
-                    {validCount} valid, {errorCount} with errors out of{" "}
-                    {csvRows.length} rows
-                  </p>
+        {/* ── Bulk Upload ───────────────────────── */}
+        <TabsContent value="bulk">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="space-y-4"
+          >
+            {/* Step 1 */}
+            <Card>
+              <CardContent className="p-5">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-bold">
+                    1
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <h3 className="text-sm font-semibold">
+                      Download Sample CSV
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      Download the template, fill in your product data, then
+                      upload it below.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={downloadSample}
+                    >
+                      <Download size={14} /> Download Template
+                    </Button>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                      <FileSpreadsheet
+                        size={13}
+                        className="text-muted-foreground"
+                      />
+                      <span className="text-xs text-muted-foreground">
+                        Expected columns:
+                      </span>
+                      <Badge variant="secondary" className="text-[10px]">
+                        name *
+                      </Badge>
+                      <Badge variant="secondary" className="text-[10px]">
+                        sku_code *
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px]">
+                        price
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px]">
+                        stock_at_warehouse
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px]">
+                        uom
+                      </Badge>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </CardContent>
+            </Card>
 
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Row</th>
-                      <th>Name</th>
-                      <th>SKU Code</th>
-                      <th>Price</th>
-                      <th>Stock</th>
-                      <th>UOM</th>
-                      <th>Status</th>
-                      <th style={{ width: 50 }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {csvRows.map((r) => (
-                      <tr
-                        key={r.row}
-                        className={r.errors.length > 0 ? "cp-row-error" : ""}
+            {/* Step 2 */}
+            <Card>
+              <CardContent className="p-5">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-bold">
+                    2
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <h3 className="text-sm font-semibold">Upload Your CSV</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Select your filled CSV file. We'll validate it before
+                      creating products.
+                    </p>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".csv"
+                      className="hidden"
+                      onChange={handleFileChange}
+                    />
+                    <div className="flex items-center gap-3">
+                      <Button
+                        size="sm"
+                        onClick={() => fileInputRef.current?.click()}
                       >
-                        <td>{r.row}</td>
-                        <td className="td-bold">{r.name || "—"}</td>
-                        <td>
-                          <code>{r.sku_code || "—"}</code>
-                        </td>
-                        <td>₹{Number(r.price || 0).toFixed(2)}</td>
-                        <td>{r.stock_at_warehouse}</td>
-                        <td>{r.uom || "pcs"}</td>
-                        <td>
-                          {r.errors.length > 0 ? (
-                            <span className="cp-validation-err">
-                              <AlertTriangle size={13} />
-                              {r.errors.join("; ")}
-                            </span>
-                          ) : (
-                            <span className="cp-validation-ok">
-                              <CheckCircle2 size={13} /> Valid
-                            </span>
-                          )}
-                        </td>
-                        <td>
-                          <button
-                            className="btn-icon btn-icon--danger"
-                            title="Remove row"
-                            onClick={() => removeRow(r.row)}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                        <Upload size={14} /> Choose CSV
+                      </Button>
+                      {fileName && (
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                          <FileSpreadsheet size={13} />
+                          {fileName}
+                        </span>
+                      )}
+                    </div>
+                    {bulkError && (
+                      <Alert variant="destructive" className="mt-2">
+                        {bulkError}
+                      </Alert>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-              <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
-                <button
-                  className="btn btn-primary"
-                  disabled={bulkUploading || errorCount > 0}
-                  onClick={handleBulkUpload}
-                >
-                  {bulkUploading
-                    ? "Uploading..."
-                    : `Create ${validCount} Product${validCount !== 1 ? "s" : ""}`}
-                </button>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    setCsvRows([]);
-                    setBulkResults([]);
-                    setFileName("");
-                  }}
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-          )}
+            {/* Step 3: Preview */}
+            {csvRows.length > 0 && (
+              <Card>
+                <CardContent className="p-5">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-bold">
+                      3
+                    </div>
+                    <div className="flex-1 space-y-3">
+                      <div>
+                        <h3 className="text-sm font-semibold">
+                          Preview & Validate
+                        </h3>
+                        <p className="text-xs text-muted-foreground">
+                          {validCount} valid, {errorCount} with errors out of{" "}
+                          {csvRows.length} rows
+                        </p>
+                      </div>
+                      <div className="rounded-lg border overflow-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-12">Row</TableHead>
+                              <TableHead>Name</TableHead>
+                              <TableHead>SKU</TableHead>
+                              <TableHead>Price</TableHead>
+                              <TableHead>Stock</TableHead>
+                              <TableHead>UOM</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead className="w-10"></TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {csvRows.map((r) => (
+                              <TableRow
+                                key={r.row}
+                                className={
+                                  r.errors.length > 0 ? "bg-red-50/50" : ""
+                                }
+                              >
+                                <TableCell className="text-xs">
+                                  {r.row}
+                                </TableCell>
+                                <TableCell className="text-xs font-medium">
+                                  {r.name || "—"}
+                                </TableCell>
+                                <TableCell>
+                                  <code className="text-xs">
+                                    {r.sku_code || "—"}
+                                  </code>
+                                </TableCell>
+                                <TableCell className="text-xs">
+                                  ₹{Number(r.price || 0).toFixed(2)}
+                                </TableCell>
+                                <TableCell className="text-xs">
+                                  {r.stock_at_warehouse}
+                                </TableCell>
+                                <TableCell className="text-xs">
+                                  {r.uom || "pcs"}
+                                </TableCell>
+                                <TableCell>
+                                  {r.errors.length > 0 ? (
+                                    <span className="flex items-center gap-1 text-xs text-red-600">
+                                      <AlertTriangle size={12} />
+                                      {r.errors.join("; ")}
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center gap-1 text-xs text-emerald-600">
+                                      <CheckCircle2 size={12} />
+                                      Valid
+                                    </span>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-red-500 hover:text-red-700"
+                                    onClick={() => removeRow(r.row)}
+                                  >
+                                    <Trash2 size={13} />
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      <div className="flex gap-3">
+                        <Button
+                          size="sm"
+                          disabled={bulkUploading || errorCount > 0}
+                          onClick={handleBulkUpload}
+                        >
+                          {bulkUploading
+                            ? "Uploading..."
+                            : `Create ${validCount} Product${validCount !== 1 ? "s" : ""}`}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setCsvRows([]);
+                            setBulkResults([]);
+                            setFileName("");
+                          }}
+                        >
+                          Clear
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
-          {/* Bulk results */}
-          {bulkResults.length > 0 && (
-            <div className="card cp-card">
-              <h3 className="cp-card-title">Upload Results</h3>
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Row</th>
-                      <th>Name</th>
-                      <th>SKU</th>
-                      <th>Result</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {bulkResults.map((r, i) => (
-                      <tr key={i}>
-                        <td>{r.row}</td>
-                        <td className="td-bold">{r.name}</td>
-                        <td>
-                          <code>{r.sku_code}</code>
-                        </td>
-                        <td>
-                          {r.status === "created" ? (
-                            <span className="cp-validation-ok">
-                              <CheckCircle2 size={13} /> Created
-                            </span>
-                          ) : (
-                            <span className="cp-validation-err">
-                              <XCircle size={13} /> {r.message}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div style={{ marginTop: 12 }}>
-                <button
-                  className="btn btn-primary btn-sm"
-                  onClick={() => navigate("/products")}
-                >
-                  Go to Products
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+            {/* Bulk results */}
+            {bulkResults.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Upload Results</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="rounded-lg border overflow-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Row</TableHead>
+                          <TableHead>Name</TableHead>
+                          <TableHead>SKU</TableHead>
+                          <TableHead>Result</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {bulkResults.map((r, i) => (
+                          <TableRow key={i}>
+                            <TableCell className="text-xs">{r.row}</TableCell>
+                            <TableCell className="text-xs font-medium">
+                              {r.name}
+                            </TableCell>
+                            <TableCell>
+                              <code className="text-xs">{r.sku_code}</code>
+                            </TableCell>
+                            <TableCell>
+                              {r.status === "created" ? (
+                                <span className="flex items-center gap-1 text-xs text-emerald-600">
+                                  <CheckCircle2 size={12} />
+                                  Created
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1 text-xs text-red-600">
+                                  <XCircle size={12} />
+                                  {r.message}
+                                </span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => navigate("/products")}
+                  >
+                    Go to Products
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+          </motion.div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

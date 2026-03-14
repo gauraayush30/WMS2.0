@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { useAuth, API } from "../context/AuthContext";
 import { Users, Shield } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Select } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Alert } from "@/components/ui/alert";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface UserItem {
   id: number;
@@ -19,23 +25,25 @@ export default function UsersPage() {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+  const [error, setError] = useState("");
 
   const fetchUsers = () => {
     setLoading(true);
+    setError("");
     authFetch(`${API}/users`)
       .then((r) => r.json())
       .then((data) => setUsers(data.users || []))
-      .catch(console.error)
+      .catch(() => setError("Failed to load users"))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     fetchUsers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleRoleChange = async (targetId: number, newRole: string) => {
     setUpdatingId(targetId);
+    setError("");
     try {
       const res = await authFetch(`${API}/users/${targetId}/role`, {
         method: "PUT",
@@ -43,81 +51,74 @@ export default function UsersPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(err.detail || "Failed to update role");
+        setError(err.detail || "Failed to update role");
         return;
       }
       fetchUsers();
     } catch {
-      alert("Error updating role");
+      setError("Error updating role");
     } finally {
       setUpdatingId(null);
     }
   };
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h2 className="page-title">
-          <Users size={22} /> Users & Employees
-        </h2>
-        <span className="page-count">{users.length} members</span>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-xl font-bold flex items-center gap-2"><Users size={20} /> Users & Employees</h2>
+        <Badge variant="secondary">{users.length} members</Badge>
       </div>
 
+      {error && <Alert variant="destructive">{error}</Alert>}
+
       {loading ? (
-        <div className="loading">Loading...</div>
+        <div className="space-y-3">{[...Array(6)].map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
       ) : users.length === 0 ? (
-        <div className="empty-state">
-          <p>No users found in your business.</p>
-        </div>
+        <Card><CardContent className="py-10 text-center text-muted-foreground">No users found in your business.</CardContent></Card>
       ) : (
-        <div className="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Username</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Joined</th>
-              </tr>
-            </thead>
-            <tbody>
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Username</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Joined</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {users.map((u) => (
-                <tr key={u.id}>
-                  <td className="td-bold">
+                <TableRow key={u.id}>
+                  <TableCell className="text-sm font-medium">
                     {u.name}
-                    {u.id === user?.id && (
-                      <span className="badge badge--you">You</span>
-                    )}
-                  </td>
-                  <td>{u.username || "—"}</td>
-                  <td>{u.email}</td>
-                  <td>
+                    {u.id === user?.id && <Badge variant="outline" className="ml-2">You</Badge>}
+                  </TableCell>
+                  <TableCell className="text-sm">{u.username || "-"}</TableCell>
+                  <TableCell className="text-sm">{u.email}</TableCell>
+                  <TableCell>
                     {user?.role === "admin" && u.id !== user?.id ? (
-                      <select
+                      <Select
                         value={u.role}
-                        onChange={(e) => handleRoleChange(u.id, e.target.value)}
                         disabled={updatingId === u.id}
-                        className="role-select"
+                        onChange={(e) => handleRoleChange(u.id, e.target.value)}
                       >
                         {ROLE_OPTIONS.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
+                          <option key={r} value={r}>{r}</option>
                         ))}
-                      </select>
+                      </Select>
                     ) : (
-                      <span className={`role-badge role-badge--${u.role}`}>
-                        <Shield size={12} /> {u.role}
-                      </span>
+                      <Badge variant="secondary" className="capitalize">
+                        <Shield size={12} className="mr-1" /> {u.role}
+                      </Badge>
                     )}
-                  </td>
-                  <td>{new Date(u.created_at).toLocaleDateString()}</td>
-                </tr>
+                  </TableCell>
+                  <TableCell className="text-sm">{new Date(u.created_at).toLocaleDateString()}</TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
       )}
     </div>
   );

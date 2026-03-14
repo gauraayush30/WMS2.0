@@ -5,6 +5,7 @@ while keeping authentication centralized in the main API.
 All endpoints live under /products/{product_id}/forecast/…
 """
 
+import io
 import os
 
 import httpx
@@ -21,6 +22,9 @@ ML_SERVICE_URL = os.getenv("ML_SERVICE_URL", "http://127.0.0.1:8100")
 # Shared timeout config for ML service calls (training can be slow)
 _TIMEOUT = httpx.Timeout(timeout=120.0, connect=10.0)
 
+_TEMPLATE_HEADER = "date,inbound,outbound,stock_on_hand\n"
+_TEMPLATE_SAMPLE = "2026-01-01,0,12,120\n"
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,33 +39,66 @@ def _get_user_context(user_id: int) -> tuple[int, int]:
     return user["id"], user["business_id"]
 
 
+def _raise_proxy_http_error(resp: httpx.Response, fallback_message: str):
+    """Raise an HTTPException by preserving upstream status/details when possible."""
+    detail = fallback_message
+    try:
+        payload = resp.json()
+        if isinstance(payload, dict) and payload.get("detail"):
+            detail = payload["detail"]
+    except Exception:
+        if resp.text:
+            detail = resp.text
+    raise HTTPException(status_code=resp.status_code, detail=detail)
+
+
+def _raise_service_unavailable(exc: Exception):
+    """Return a clear 503 error when the ML service is unreachable."""
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            f"ML service is unavailable at {ML_SERVICE_URL}. "
+            f"Start/restart the ML service and retry. ({type(exc).__name__})"
+        ),
+    )
+
+
 async def _proxy_get(path: str, business_id: int, extra_params: dict | None = None):
     """Forward a GET request to the ML service."""
     params = {"business_id": business_id, **(extra_params or {})}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.get(f"{ML_SERVICE_URL}{path}", params=params)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(f"{ML_SERVICE_URL}{path}", params=params)
+    except httpx.RequestError as exc:
+        _raise_service_unavailable(exc)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.json().get("detail", resp.text))
+        _raise_proxy_http_error(resp, "ML service request failed")
     return resp.json()
 
 
 async def _proxy_post(path: str, business_id: int, user_id: int, extra_params: dict | None = None):
     """Forward a POST request to the ML service."""
     params = {"business_id": business_id, "user_id": user_id, **(extra_params or {})}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(f"{ML_SERVICE_URL}{path}", params=params)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(f"{ML_SERVICE_URL}{path}", params=params)
+    except httpx.RequestError as exc:
+        _raise_service_unavailable(exc)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.json().get("detail", resp.text))
+        _raise_proxy_http_error(resp, "ML service request failed")
     return resp.json()
 
 
 async def _proxy_delete(path: str, business_id: int):
     """Forward a DELETE request to the ML service."""
     params = {"business_id": business_id}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.delete(f"{ML_SERVICE_URL}{path}", params=params)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.delete(f"{ML_SERVICE_URL}{path}", params=params)
+    except httpx.RequestError as exc:
+        _raise_service_unavailable(exc)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.json().get("detail", resp.text))
+        _raise_proxy_http_error(resp, "ML service request failed")
     return resp.json()
 
 
@@ -85,24 +122,36 @@ async def forecast_training_data(product_id: int, user_id: int = Depends(get_cur
 async def forecast_download_template(product_id: int, user_id: int = Depends(get_current_user_id)):
     """Download CSV template for historical data upload."""
     _, biz_id = _get_user_context(user_id)
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.get(
-            f"{ML_SERVICE_URL}/template/{product_id}",
-            params={"business_id": biz_id},
-        )
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail="Failed to generate template")
-
-    return StreamingResponse(
-        iter([resp.content]),
-        media_type=resp.headers.get("content-type", "text/csv"),
-        headers={
-            "Content-Disposition": resp.headers.get(
-                "content-disposition",
-                f'attachment; filename="history_template_{product_id}.csv"',
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                f"{ML_SERVICE_URL}/template/{product_id}",
+                params={"business_id": biz_id},
             )
-        },
-    )
+        if resp.status_code >= 400:
+            _raise_proxy_http_error(resp, "Failed to generate template")
+
+        return StreamingResponse(
+            iter([resp.content]),
+            media_type=resp.headers.get("content-type", "text/csv"),
+            headers={
+                "Content-Disposition": resp.headers.get(
+                    "content-disposition",
+                    f'attachment; filename="history_template_{product_id}.csv"',
+                )
+            },
+        )
+    except httpx.RequestError:
+        # Fallback template keeps UX working even if the ML service is down.
+        csv_content = _TEMPLATE_HEADER + _TEMPLATE_SAMPLE
+        return StreamingResponse(
+            io.BytesIO(csv_content.encode("utf-8")),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="history_template_{product_id}.csv"',
+                "X-Template-Source": "backend-fallback",
+            },
+        )
 
 
 @router.post("/upload")
@@ -115,15 +164,18 @@ async def forecast_upload_history(
     uid, biz_id = _get_user_context(user_id)
     contents = await file.read()
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(
-            f"{ML_SERVICE_URL}/upload/{product_id}",
-            params={"business_id": biz_id, "user_id": uid},
-            files={"file": (file.filename, contents, file.content_type or "text/csv")},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                f"{ML_SERVICE_URL}/upload/{product_id}",
+                params={"business_id": biz_id, "user_id": uid},
+                files={"file": (file.filename, contents, file.content_type or "text/csv")},
+            )
+    except httpx.RequestError as exc:
+        _raise_service_unavailable(exc)
 
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.json().get("detail", resp.text))
+        _raise_proxy_http_error(resp, "ML upload failed")
     return resp.json()
 
 

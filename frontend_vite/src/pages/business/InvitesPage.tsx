@@ -11,8 +11,14 @@ import {
   Send,
   Inbox,
 } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
-/* ── Types ────────────────────────────────────────────────────── */
 interface AvailableUser {
   id: number;
   username: string;
@@ -45,7 +51,6 @@ export default function InvitesPage() {
   const isAdmin = user?.role === "admin";
   const hasBusiness = !!user?.business_id;
 
-  /* ── Admin state: search users + sent invites ─────────────── */
   const [search, setSearch] = useState("");
   const [availableUsers, setAvailableUsers] = useState<AvailableUser[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -53,7 +58,6 @@ export default function InvitesPage() {
   const [sentLoading, setSentLoading] = useState(false);
   const [sendingTo, setSendingTo] = useState<number | null>(null);
 
-  /* ── Employee state: received invites ─────────────────────── */
   const [receivedInvites, setReceivedInvites] = useState<ReceivedInvite[]>([]);
   const [receivedLoading, setReceivedLoading] = useState(false);
   const [actioningId, setActioningId] = useState<number | null>(null);
@@ -61,7 +65,6 @@ export default function InvitesPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  /* ── Fetch functions ──────────────────────────────────────── */
   const searchUsers = useCallback(async () => {
     setSearchLoading(true);
     try {
@@ -72,8 +75,6 @@ export default function InvitesPage() {
         const data = await res.json();
         setAvailableUsers(data.users || []);
       }
-    } catch {
-      /* ignore */
     } finally {
       setSearchLoading(false);
     }
@@ -87,8 +88,6 @@ export default function InvitesPage() {
         const data = await res.json();
         setSentInvites(data.invites || []);
       }
-    } catch {
-      /* ignore */
     } finally {
       setSentLoading(false);
     }
@@ -102,22 +101,16 @@ export default function InvitesPage() {
         const data = await res.json();
         setReceivedInvites(data.invites || []);
       }
-    } catch {
-      /* ignore */
     } finally {
       setReceivedLoading(false);
     }
   }, [authFetch]);
 
   useEffect(() => {
-    if (isAdmin && hasBusiness) {
-      fetchSentInvites();
-    }
-    // All users can see received invites
+    if (isAdmin && hasBusiness) fetchSentInvites();
     fetchReceivedInvites();
   }, [isAdmin, hasBusiness, fetchSentInvites, fetchReceivedInvites]);
 
-  /* ── Handlers ─────────────────────────────────────────────── */
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     searchUsers();
@@ -137,8 +130,7 @@ export default function InvitesPage() {
         throw new Error(err.detail || "Failed to send invite");
       }
       setMessage("Invite sent successfully!");
-      setTimeout(() => setMessage(""), 3000);
-      // Refresh both lists
+      setTimeout(() => setMessage(""), 2500);
       searchUsers();
       fetchSentInvites();
     } catch (err: unknown) {
@@ -153,20 +145,14 @@ export default function InvitesPage() {
     setMessage("");
     setActioningId(inviteId);
     try {
-      const res = await authFetch(`${API}/invites/${inviteId}/accept`, {
-        method: "POST",
-      });
+      const res = await authFetch(`${API}/invites/${inviteId}/accept`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Failed to accept invite");
       }
-      setMessage("Invite accepted! You've joined the business.");
-      // Refresh user data from server
+      setMessage("Invite accepted! You joined the business.");
       const meRes = await authFetch(`${API}/auth/me`);
-      if (meRes.ok) {
-        const freshUser = await meRes.json();
-        updateUser(freshUser);
-      }
+      if (meRes.ok) updateUser(await meRes.json());
       fetchReceivedInvites();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error");
@@ -180,15 +166,13 @@ export default function InvitesPage() {
     setMessage("");
     setActioningId(inviteId);
     try {
-      const res = await authFetch(`${API}/invites/${inviteId}/reject`, {
-        method: "POST",
-      });
+      const res = await authFetch(`${API}/invites/${inviteId}/reject`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Failed to reject invite");
       }
       setMessage("Invite rejected.");
-      setTimeout(() => setMessage(""), 3000);
+      setTimeout(() => setMessage(""), 2000);
       fetchReceivedInvites();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error");
@@ -198,205 +182,154 @@ export default function InvitesPage() {
   };
 
   const statusBadge = (s: string) => {
-    if (s === "pending")
-      return (
-        <span className="inv-status inv-status--pending">
-          <Clock size={13} /> Pending
-        </span>
-      );
-    if (s === "accepted")
-      return (
-        <span className="inv-status inv-status--accepted">
-          <CheckCircle2 size={13} /> Accepted
-        </span>
-      );
-    return (
-      <span className="inv-status inv-status--rejected">
-        <XCircle size={13} /> Rejected
-      </span>
-    );
+    if (s === "pending") return <Badge variant="warning"><Clock size={12} className="mr-1" />Pending</Badge>;
+    if (s === "accepted") return <Badge variant="success"><CheckCircle2 size={12} className="mr-1" />Accepted</Badge>;
+    return <Badge variant="destructive"><XCircle size={12} className="mr-1" />Rejected</Badge>;
   };
 
-  /* ── Render ───────────────────────────────────────────────── */
   return (
-    <div className="page invites-page">
-      <h2 className="page-title">
-        {isAdmin && hasBusiness ? "Manage Invites" : "My Invites"}
-      </h2>
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold">{isAdmin && hasBusiness ? "Manage Invites" : "My Invites"}</h2>
 
-      {error && <div className="alert alert-error">{error}</div>}
-      {message && <div className="alert alert-success">{message}</div>}
+      {error && <Alert variant="destructive">{error}</Alert>}
+      {message && <Alert variant="success">{message}</Alert>}
 
-      {/* ── ADMIN VIEW: Search + Send + Sent invites ────────── */}
       {isAdmin && hasBusiness && (
         <>
-          {/* Search users without business */}
-          <div className="card" style={{ marginBottom: 24 }}>
-            <div className="card-header-row">
-              <UserPlus size={20} />
-              <h3>Invite Users</h3>
-            </div>
-            <p style={{ color: "var(--text-secondary)", marginBottom: 12 }}>
-              Search for users who haven't joined a business yet and send them
-              an invite.
-            </p>
-            <form
-              onSubmit={handleSearch}
-              style={{ display: "flex", gap: 8, marginBottom: 16 }}
-            >
-              <div className="search-box" style={{ flex: 1 }}>
-                <Search size={16} />
-                <input
-                  type="text"
-                  placeholder="Search by name or email..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-              </div>
-              <button type="submit" className="btn btn-primary">
-                Search
-              </button>
-            </form>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2"><UserPlus size={16} /> Invite Users</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">Search for users who have not joined a business and send invites.</p>
+              <form onSubmit={handleSearch} className="flex gap-2">
+                <Input placeholder="Search by name or email..." value={search} onChange={(e) => setSearch(e.target.value)} />
+                <Button type="submit"><Search size={14} /> Search</Button>
+              </form>
 
-            {searchLoading ? (
-              <div className="loading">Searching...</div>
-            ) : availableUsers.length > 0 ? (
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Email</th>
-                      <th>Joined</th>
-                      <th style={{ width: 120 }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {availableUsers.map((u) => (
-                      <tr key={u.id}>
-                        <td className="td-bold">{u.name}</td>
-                        <td>{u.email}</td>
-                        <td>{new Date(u.created_at).toLocaleDateString()}</td>
-                        <td>
-                          <button
-                            className="btn btn-primary btn-sm"
-                            disabled={sendingTo === u.id}
-                            onClick={() => handleSendInvite(u.id)}
-                          >
-                            <Send size={14} />{" "}
-                            {sendingTo === u.id ? "Sending..." : "Invite"}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : search ? (
-              <p style={{ color: "var(--text-secondary)" }}>
-                No users found matching "{search}".
-              </p>
-            ) : null}
-          </div>
+              {searchLoading ? (
+                <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
+              ) : availableUsers.length > 0 ? (
+                <div className="rounded-lg border overflow-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Joined</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {availableUsers.map((u) => (
+                        <TableRow key={u.id}>
+                          <TableCell className="text-sm font-medium">{u.name}</TableCell>
+                          <TableCell className="text-sm">{u.email}</TableCell>
+                          <TableCell className="text-sm">{new Date(u.created_at).toLocaleDateString()}</TableCell>
+                          <TableCell>
+                            <Button size="sm" disabled={sendingTo === u.id} onClick={() => handleSendInvite(u.id)}>
+                              <Send size={13} /> {sendingTo === u.id ? "Sending..." : "Invite"}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : search ? (
+                <p className="text-sm text-muted-foreground">No users found matching "{search}".</p>
+              ) : null}
+            </CardContent>
+          </Card>
 
-          {/* Sent invites */}
-          <div className="card" style={{ marginBottom: 24 }}>
-            <div className="card-header-row">
-              <Send size={20} />
-              <h3>Sent Invites</h3>
-            </div>
-            {sentLoading ? (
-              <div className="loading">Loading...</div>
-            ) : sentInvites.length === 0 ? (
-              <p style={{ color: "var(--text-secondary)" }}>
-                No invites sent yet.
-              </p>
-            ) : (
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Invited User</th>
-                      <th>Email</th>
-                      <th>Status</th>
-                      <th>Sent</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sentInvites.map((inv) => (
-                      <tr key={inv.id}>
-                        <td className="td-bold">{inv.to_user_name}</td>
-                        <td>{inv.to_user_email}</td>
-                        <td>{statusBadge(inv.status)}</td>
-                        <td>{new Date(inv.created_at).toLocaleDateString()}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2"><Send size={16} /> Sent Invites</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {sentLoading ? (
+                <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
+              ) : sentInvites.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No invites sent yet.</p>
+              ) : (
+                <div className="rounded-lg border overflow-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Invited User</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Sent</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {sentInvites.map((inv) => (
+                        <TableRow key={inv.id}>
+                          <TableCell className="text-sm font-medium">{inv.to_user_name}</TableCell>
+                          <TableCell className="text-sm">{inv.to_user_email}</TableCell>
+                          <TableCell>{statusBadge(inv.status)}</TableCell>
+                          <TableCell className="text-sm">{new Date(inv.created_at).toLocaleDateString()}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </>
       )}
 
-      {/* ── RECEIVED INVITES (visible to all) ───────────────── */}
-      <div className="card">
-        <div className="card-header-row">
-          <Inbox size={20} />
-          <h3>Received Invites</h3>
-        </div>
-        {receivedLoading ? (
-          <div className="loading">Loading...</div>
-        ) : receivedInvites.length === 0 ? (
-          <p style={{ color: "var(--text-secondary)" }}>No invites received.</p>
-        ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Business</th>
-                  <th>Location</th>
-                  <th>Invited By</th>
-                  <th>Status</th>
-                  <th>Received</th>
-                  <th style={{ width: 160 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {receivedInvites.map((inv) => (
-                  <tr key={inv.id}>
-                    <td className="td-bold">{inv.business_name}</td>
-                    <td>{inv.business_location || "—"}</td>
-                    <td>{inv.from_user_name}</td>
-                    <td>{statusBadge(inv.status)}</td>
-                    <td>{new Date(inv.created_at).toLocaleDateString()}</td>
-                    <td>
-                      {inv.status === "pending" && (
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button
-                            className="btn btn-primary btn-sm"
-                            disabled={actioningId === inv.id}
-                            onClick={() => handleAccept(inv.id)}
-                          >
-                            <Check size={14} /> Accept
-                          </button>
-                          <button
-                            className="btn btn-danger btn-sm"
-                            disabled={actioningId === inv.id}
-                            onClick={() => handleReject(inv.id)}
-                          >
-                            <X size={14} /> Reject
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><Inbox size={16} /> Received Invites</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {receivedLoading ? (
+            <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>
+          ) : receivedInvites.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No invites received.</p>
+          ) : (
+            <div className="rounded-lg border overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Business</TableHead>
+                    <TableHead>Location</TableHead>
+                    <TableHead>Invited By</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Received</TableHead>
+                    <TableHead></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {receivedInvites.map((inv) => (
+                    <TableRow key={inv.id}>
+                      <TableCell className="text-sm font-medium">{inv.business_name}</TableCell>
+                      <TableCell className="text-sm">{inv.business_location || "-"}</TableCell>
+                      <TableCell className="text-sm">{inv.from_user_name}</TableCell>
+                      <TableCell>{statusBadge(inv.status)}</TableCell>
+                      <TableCell className="text-sm">{new Date(inv.created_at).toLocaleDateString()}</TableCell>
+                      <TableCell>
+                        {inv.status === "pending" && (
+                          <div className="flex gap-2">
+                            <Button size="sm" disabled={actioningId === inv.id} onClick={() => handleAccept(inv.id)}>
+                              <Check size={13} /> Accept
+                            </Button>
+                            <Button size="sm" variant="destructive" disabled={actioningId === inv.id} onClick={() => handleReject(inv.id)}>
+                              <X size={13} /> Reject
+                            </Button>
+                          </div>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
