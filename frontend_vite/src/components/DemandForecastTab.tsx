@@ -522,21 +522,21 @@ export default function DemandForecastTab({
                     <div className="p-3 rounded-lg bg-muted/50 space-y-1">
                       <p className="font-medium">Auto-aggregated</p>
                       <p className="text-muted-foreground">
-                        {trainingData.auto_data.count} days
+                        {trainingData?.auto_data?.count} days
                       </p>
-                      {trainingData.auto_data.date_range && (
+                      {trainingData?.auto_data?.date_range && (
                         <p className="text-muted-foreground">
-                          {trainingData.auto_data.date_range.start} →{" "}
-                          {trainingData.auto_data.date_range.end}
+                          {trainingData?.auto_data?.date_range.start} →{" "}
+                          {trainingData?.auto_data?.date_range.end}
                         </p>
                       )}
                     </div>
                     <div className="p-3 rounded-lg bg-muted/50 space-y-1">
                       <p className="font-medium">Uploaded</p>
                       <p className="text-muted-foreground">
-                        {trainingData.uploaded_data.count} days
+                        {trainingData?.uploaded_data?.count ?? 0} days
                       </p>
-                      {trainingData.uploaded_data.date_range && (
+                      {trainingData?.uploaded_data?.date_range && (
                         <p className="text-muted-foreground">
                           {trainingData.uploaded_data.date_range.start} →{" "}
                           {trainingData.uploaded_data.date_range.end}
@@ -546,9 +546,9 @@ export default function DemandForecastTab({
                     <div className="p-3 rounded-lg bg-primary/5 border border-primary/10 space-y-1">
                       <p className="font-semibold">Merged Total</p>
                       <p className="text-muted-foreground font-medium">
-                        {trainingData.merged.count} days
+                        {trainingData?.merged?.count ?? 0} days
                       </p>
-                      {trainingData.merged.date_range && (
+                      {trainingData?.merged?.date_range && (
                         <p className="text-muted-foreground">
                           {trainingData.merged.date_range.start} →{" "}
                           {trainingData.merged.date_range.end}
