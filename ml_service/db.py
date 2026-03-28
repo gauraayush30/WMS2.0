@@ -46,7 +46,7 @@ def get_daily_aggregated_transactions(product_id: int, business_id: int) -> pd.D
         return pd.DataFrame(columns=["date", "inbound_qty", "outbound_qty"])
 
     df = pd.DataFrame(rows)
-    df["date"] = pd.to_datetime(df["date"]).dt.date
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     df["inbound_qty"] = df["inbound_qty"].astype(int)
     df["outbound_qty"] = df["outbound_qty"].astype(int)
     return df
@@ -80,7 +80,7 @@ def get_uploaded_history(product_id: int, business_id: int) -> pd.DataFrame:
         return pd.DataFrame(columns=["date", "inbound_qty", "outbound_qty", "stock_level"])
 
     df = pd.DataFrame(rows)
-    df["date"] = pd.to_datetime(df["date"]).dt.date
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     return df
 
 

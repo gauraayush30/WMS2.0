@@ -1465,3 +1465,136 @@ def get_dashboard_stats(business_id: int) -> dict:
         for key, q in queries.items():
             stats[key] = conn.execute(q, {"biz": business_id}).scalar() or 0
     return stats
+
+
+def get_product_analytics(product_id: int, business_id: int, days: int = 90) -> dict:
+    """Return daily-aggregated transaction analytics for a single product.
+
+    Includes daily inbound/outbound/net, closing stock, reason breakdown,
+    and summary statistics.  Also merges uploaded ML history data.
+    """
+    daily_query = text("""
+        WITH combined AS (
+            SELECT
+                DATE(t.transaction_at)  AS date,
+                t.stock_adjusted,
+                t.current_stock,
+                t.reason,
+                t.transaction_at
+            FROM inventory_transactions t
+            WHERE t.product_id  = :pid
+              AND t.business_id = :biz
+              AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+
+            UNION ALL
+
+            SELECT
+                m.date                          AS date,
+                (m.inbound_qty - m.outbound_qty) AS stock_adjusted,
+                m.stock_level                   AS current_stock,
+                'uploaded_history'              AS reason,
+                m.date::timestamp               AS transaction_at
+            FROM ml_uploaded_history m
+            WHERE m.product_id  = :pid
+              AND m.business_id = :biz
+              AND m.date >= (CURRENT_DATE - MAKE_INTERVAL(days => :days))
+        )
+        SELECT
+            date,
+            SUM(CASE WHEN stock_adjusted > 0 THEN stock_adjusted ELSE 0 END)::int             AS inbound,
+            SUM(CASE WHEN stock_adjusted < 0 THEN ABS(stock_adjusted) ELSE 0 END)::int        AS outbound,
+            SUM(stock_adjusted)::int                                                            AS net_change,
+            (ARRAY_AGG(current_stock ORDER BY transaction_at DESC))[1]::int                    AS closing_stock,
+            COUNT(*)::int                                                                       AS tx_count,
+            SUM(CASE WHEN reason IN ('stock_in','delivery') AND stock_adjusted > 0
+                     THEN stock_adjusted ELSE 0 END)::int                                      AS stock_in_qty,
+            SUM(CASE WHEN reason IN ('stock_out','shipment') AND stock_adjusted < 0
+                     THEN ABS(stock_adjusted) ELSE 0 END)::int                                 AS stock_out_qty,
+            SUM(CASE WHEN reason = 'return'
+                     THEN ABS(stock_adjusted) ELSE 0 END)::int                                 AS return_qty,
+            SUM(CASE WHEN reason = 'damage'
+                     THEN ABS(stock_adjusted) ELSE 0 END)::int                                 AS damage_qty,
+            SUM(CASE WHEN reason = 'adjustment'
+                     THEN stock_adjusted ELSE 0 END)::int                                      AS adjustment_qty,
+            SUM(CASE WHEN reason = 'uploaded_history' AND stock_adjusted > 0
+                     THEN stock_adjusted ELSE 0 END)::int                                      AS uploaded_inbound_qty,
+            SUM(CASE WHEN reason = 'uploaded_history' AND stock_adjusted < 0
+                     THEN ABS(stock_adjusted) ELSE 0 END)::int                                 AS uploaded_outbound_qty
+        FROM combined
+        GROUP BY date
+        ORDER BY date
+    """)
+
+    summary_query = text("""
+        WITH combined AS (
+            SELECT stock_adjusted, transaction_at
+            FROM inventory_transactions
+            WHERE product_id  = :pid AND business_id = :biz
+
+            UNION ALL
+
+            SELECT (inbound_qty - outbound_qty) AS stock_adjusted,
+                   date::timestamp              AS transaction_at
+            FROM ml_uploaded_history
+            WHERE product_id  = :pid AND business_id = :biz
+        )
+        SELECT
+            COUNT(*)::int                                                                      AS total_transactions,
+            COALESCE(SUM(CASE WHEN stock_adjusted > 0 THEN stock_adjusted ELSE 0 END), 0)::int AS total_inbound,
+            COALESCE(SUM(CASE WHEN stock_adjusted < 0 THEN ABS(stock_adjusted) ELSE 0 END), 0)::int AS total_outbound,
+            MIN(transaction_at)                                                                 AS first_transaction,
+            MAX(transaction_at)                                                                 AS last_transaction,
+            COUNT(DISTINCT DATE(transaction_at))::int                                           AS active_days
+        FROM combined
+    """)
+
+    reason_query = text("""
+        WITH combined AS (
+            SELECT reason, stock_adjusted, transaction_at
+            FROM inventory_transactions
+            WHERE product_id  = :pid
+              AND business_id = :biz
+              AND transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+
+            UNION ALL
+
+            SELECT
+                'uploaded_history'              AS reason,
+                (inbound_qty - outbound_qty)    AS stock_adjusted,
+                date::timestamp                 AS transaction_at
+            FROM ml_uploaded_history
+            WHERE product_id  = :pid
+              AND business_id = :biz
+              AND date >= (CURRENT_DATE - MAKE_INTERVAL(days => :days))
+        )
+        SELECT
+            reason,
+            COUNT(*)::int AS count,
+            SUM(ABS(stock_adjusted))::int AS total_qty
+        FROM combined
+        GROUP BY reason
+        ORDER BY total_qty DESC
+    """)
+
+    params = {"pid": product_id, "biz": business_id, "days": days}
+
+    with engine.connect() as conn:
+        daily_rows = conn.execute(daily_query, params).mappings().all()
+        summary_row = conn.execute(summary_query, {"pid": product_id, "biz": business_id}).mappings().fetchone()
+        reason_rows = conn.execute(reason_query, params).mappings().all()
+
+    daily = []
+    for r in daily_rows:
+        d = dict(r)
+        d["date"] = str(d["date"])
+        daily.append(d)
+
+    summary = dict(summary_row) if summary_row else {}
+    if summary.get("first_transaction"):
+        summary["first_transaction"] = str(summary["first_transaction"])
+    if summary.get("last_transaction"):
+        summary["last_transaction"] = str(summary["last_transaction"])
+
+    reasons = [dict(r) for r in reason_rows]
+
+    return {"daily": daily, "summary": summary, "reasons": reasons}

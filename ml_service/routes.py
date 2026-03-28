@@ -83,8 +83,8 @@ async def upload_history(
         "message": f"Successfully uploaded {n_rows} rows of historical data",
         "rows_uploaded": n_rows,
         "date_range": {
-            "start": str(df["date"].min()),
-            "end": str(df["date"].max()),
+            "start": str(df["date"].min().date()),
+            "end": str(df["date"].max().date()),
         },
     }
 
@@ -185,12 +185,12 @@ def training_data_preview(
         "uploaded_days": uploaded_days,
         "combined_unique_days": len(all_dates),
         "auto_date_range": {
-            "start": str(auto_df["date"].min()) if not auto_df.empty else None,
-            "end": str(auto_df["date"].max()) if not auto_df.empty else None,
+            "start": str(auto_df["date"].min().date()) if not auto_df.empty else None,
+            "end": str(auto_df["date"].max().date()) if not auto_df.empty else None,
         },
         "uploaded_date_range": {
-            "start": str(uploaded_df["date"].min()) if not uploaded_df.empty else None,
-            "end": str(uploaded_df["date"].max()) if not uploaded_df.empty else None,
+            "start": str(uploaded_df["date"].min().date()) if not uploaded_df.empty else None,
+            "end": str(uploaded_df["date"].max().date()) if not uploaded_df.empty else None,
         },
         "ready_to_train": len(all_dates) >= 30,
     }

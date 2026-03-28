@@ -78,7 +78,7 @@ def _add_holiday_features(df: pd.DataFrame) -> pd.DataFrame:
     Merge holiday/festival features (including the ±7 day proximity
     window) from the Indian calendar module.
     """
-    dates_list = [d if isinstance(d, date) else d.date() for d in pd.to_datetime(df["date"])]
+    dates_list = pd.to_datetime(df["date"]).dt.date.tolist()
     hol_df = get_holiday_features_for_dates(dates_list)
 
     if hol_df.empty:
@@ -142,11 +142,11 @@ def _add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-def build_feature_matrix(daily_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+def build_feature_matrix(daily_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
     """
     Given a daily DataFrame with columns ``[date, inbound_qty, outbound_qty]``,
-    return ``(X, y)`` where ``X`` is the feature matrix and ``y`` is the target
-    (daily outbound quantity).
+    return ``(X, y_outbound, y_inbound)`` where ``X`` is the feature matrix,
+    ``y_outbound`` is the outbound target, and ``y_inbound`` is the inbound target.
 
     Rows with insufficient lag history (first 7 days) are kept but use
     partial-window statistics so no data is discarded.
@@ -159,9 +159,10 @@ def build_feature_matrix(daily_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Serie
     df = _add_trend_features(df)
 
     X = df[ALL_FEATURES].astype(float)
-    y = df["outbound_qty"].astype(float)
+    y_outbound = df["outbound_qty"].astype(float)
+    y_inbound = df["inbound_qty"].astype(float)
 
-    return X, y
+    return X, y_outbound, y_inbound
 
 
 def build_prediction_features(future_dates: list[date], last_known_outbound: list[float] | None = None, last_known_inbound: list[float] | None = None) -> pd.DataFrame:

@@ -58,15 +58,13 @@ interface ModelStatus {
 }
 
 interface TrainingDataSummary {
-  auto_data: {
-    count: number;
-    date_range: { start: string; end: string } | null;
-  };
-  uploaded_data: {
-    count: number;
-    date_range: { start: string; end: string } | null;
-  };
-  merged: { count: number; date_range: { start: string; end: string } | null };
+  product_id: number;
+  auto_aggregated_days: number;
+  uploaded_days: number;
+  combined_unique_days: number;
+  auto_date_range: { start: string | null; end: string | null };
+  uploaded_date_range: { start: string | null; end: string | null };
+  ready_to_train: boolean;
 }
 
 interface PredictionDay {
@@ -192,7 +190,7 @@ export default function DemandForecastTab({
       }
       setMsg({
         type: "success",
-        text: `Uploaded ${data.rows_saved} rows successfully.`,
+        text: `Uploaded ${data.rows_uploaded ?? data.rows_saved ?? ""} rows successfully.`,
       });
       await fetchStatus();
     } catch {
@@ -377,7 +375,7 @@ export default function DemandForecastTab({
                       Auto (transactions)
                     </span>
                     <span className="font-medium">
-                      {trainingData?.auto_data?.count ?? 0} days
+                      {trainingData?.auto_aggregated_days ?? 0} days
                     </span>
                   </div>
                   <div className="flex justify-between">
@@ -385,7 +383,7 @@ export default function DemandForecastTab({
                       Uploaded (CSV)
                     </span>
                     <span className="font-medium">
-                      {trainingData?.uploaded_data?.count ?? 0} days
+                      {trainingData?.uploaded_days ?? 0} days
                     </span>
                   </div>
                   <div className="flex justify-between border-t pt-1.5">
@@ -393,7 +391,7 @@ export default function DemandForecastTab({
                       Merged total
                     </span>
                     <span className="font-semibold">
-                      {trainingData?.merged?.count ?? 0} days
+                      {trainingData?.combined_unique_days ?? 0} days
                     </span>
                   </div>
                 </div>
@@ -522,36 +520,40 @@ export default function DemandForecastTab({
                     <div className="p-3 rounded-lg bg-muted/50 space-y-1">
                       <p className="font-medium">Auto-aggregated</p>
                       <p className="text-muted-foreground">
-                        {trainingData?.auto_data?.count} days
+                        {trainingData?.auto_aggregated_days ?? 0} days
                       </p>
-                      {trainingData?.auto_data?.date_range && (
+                      {trainingData?.auto_date_range?.start && (
                         <p className="text-muted-foreground">
-                          {trainingData?.auto_data?.date_range.start} →{" "}
-                          {trainingData?.auto_data?.date_range.end}
+                          {trainingData.auto_date_range.start} →{" "}
+                          {trainingData.auto_date_range.end}
                         </p>
                       )}
                     </div>
                     <div className="p-3 rounded-lg bg-muted/50 space-y-1">
                       <p className="font-medium">Uploaded</p>
                       <p className="text-muted-foreground">
-                        {trainingData?.uploaded_data?.count ?? 0} days
+                        {trainingData?.uploaded_days ?? 0} days
                       </p>
-                      {trainingData?.uploaded_data?.date_range && (
+                      {trainingData?.uploaded_date_range?.start && (
                         <p className="text-muted-foreground">
-                          {trainingData.uploaded_data.date_range.start} →{" "}
-                          {trainingData.uploaded_data.date_range.end}
+                          {trainingData.uploaded_date_range.start} →{" "}
+                          {trainingData.uploaded_date_range.end}
                         </p>
                       )}
                     </div>
                     <div className="p-3 rounded-lg bg-primary/5 border border-primary/10 space-y-1">
                       <p className="font-semibold">Merged Total</p>
                       <p className="text-muted-foreground font-medium">
-                        {trainingData?.merged?.count ?? 0} days
+                        {trainingData?.combined_unique_days ?? 0} days
                       </p>
-                      {trainingData?.merged?.date_range && (
+                      {(trainingData?.auto_date_range?.start ||
+                        trainingData?.uploaded_date_range?.start) && (
                         <p className="text-muted-foreground">
-                          {trainingData.merged.date_range.start} →{" "}
-                          {trainingData.merged.date_range.end}
+                          {trainingData?.auto_date_range?.start ||
+                            trainingData?.uploaded_date_range?.start}{" "}
+                          →{" "}
+                          {trainingData?.auto_date_range?.end ||
+                            trainingData?.uploaded_date_range?.end}
                         </p>
                       )}
                     </div>

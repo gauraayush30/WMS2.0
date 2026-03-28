@@ -16,6 +16,7 @@ from db import (
     check_skus_exist,
     create_product_audit_entries,
     get_product_audit_log,
+    get_product_analytics,
 )
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -255,3 +256,17 @@ def get_product_audit_log_endpoint(
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     return get_product_audit_log(product_id, biz_id, page, per_page)
+
+
+@router.get("/{product_id}/analytics")
+def get_product_analytics_endpoint(
+    product_id: int,
+    days: int = Query(90, ge=7, le=365),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Get daily-aggregated analytics (inbound, outbound, stock, reason breakdown) for a product."""
+    biz_id = _get_user_business_id(user_id)
+    product = get_product_by_id(product_id, biz_id)
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    return get_product_analytics(product_id, biz_id, days)

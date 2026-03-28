@@ -93,7 +93,7 @@ def parse_and_validate_csv(file_bytes: bytes) -> tuple[pd.DataFrame, list[str]]:
     if errors:
         return pd.DataFrame(), errors
 
-    df["date"] = [pd.to_datetime(v).date() for v in df["date"]]
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
 
     # ── Validate quantity columns ────────────────────────────────
     for col in ["inbound_qty", "outbound_qty"]:

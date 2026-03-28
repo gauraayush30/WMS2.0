@@ -81,7 +81,7 @@ def _fill_missing_dates(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     full_range = pd.date_range(df["date"].min(), df["date"].max(), freq="D")
-    full_df = pd.DataFrame({"date": full_range.date})
+    full_df = pd.DataFrame({"date": full_range})
 
     merged = full_df.merge(df, on="date", how="left")
     merged["inbound_qty"] = merged["inbound_qty"].fillna(0).astype(int)
@@ -125,24 +125,26 @@ def train_model(product_id: int, business_id: int) -> dict:
             )
 
         # ── 2. Build features ────────────────────────────────────────
-        X, y = build_feature_matrix(combined)
+        X, y_outbound, y_inbound = build_feature_matrix(combined)
 
         # ── 3. Choose model ──────────────────────────────────────────
-        if n_days >= 60:
-            model = GradientBoostingRegressor(
-                n_estimators=200,
-                max_depth=5,
-                learning_rate=0.1,
-                subsample=0.8,
-                random_state=42,
-            )
-        else:
-            # Small dataset – simpler model to avoid overfitting
-            model = RandomForestRegressor(
+        def _make_model(n: int):
+            if n >= 60:
+                return GradientBoostingRegressor(
+                    n_estimators=200,
+                    max_depth=5,
+                    learning_rate=0.1,
+                    subsample=0.8,
+                    random_state=42,
+                )
+            return RandomForestRegressor(
                 n_estimators=100,
                 max_depth=8,
                 random_state=42,
             )
+
+        outbound_model = _make_model(n_days)
+        inbound_model = _make_model(n_days)
 
         # ── 4. Cross-validate with TimeSeriesSplit ───────────────────
         n_splits = min(5, max(2, n_days // 30))
@@ -153,10 +155,10 @@ def train_model(product_id: int, business_id: int) -> dict:
 
         for train_idx, test_idx in tscv.split(X):
             X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+            y_train, y_test = y_outbound.iloc[train_idx], y_outbound.iloc[test_idx]
 
-            model.fit(X_train, y_train)
-            preds = model.predict(X_test)
+            outbound_model.fit(X_train, y_train)
+            preds = outbound_model.predict(X_test)
             preds = np.maximum(preds, 0)  # demand can't be negative
 
             mae = mean_absolute_error(y_test, preds)
@@ -174,15 +176,17 @@ def train_model(product_id: int, business_id: int) -> dict:
         avg_mape = float(np.mean(cv_mapes))
 
         # ── 5. Retrain on full data ──────────────────────────────────
-        model.fit(X, y)
+        outbound_model.fit(X, y_outbound)
+        inbound_model.fit(X, y_inbound)
 
         # ── 6. Persist model ─────────────────────────────────────────
         model_path = _get_model_path(product_id, business_id)
         artifact = {
-            "model": model,
+            "model": outbound_model,
+            "inbound_model": inbound_model,
             "features": ALL_FEATURES,
-            "data_start": combined["date"].min(),
-            "data_end": combined["date"].max(),
+            "data_start": combined["date"].min().date(),
+            "data_end": combined["date"].max().date(),
             "n_days": n_days,
         }
         joblib.dump(artifact, model_path)
@@ -192,8 +196,8 @@ def train_model(product_id: int, business_id: int) -> dict:
             product_id=product_id,
             business_id=business_id,
             model_path=str(model_path),
-            data_start=combined["date"].min(),
-            data_end=combined["date"].max(),
+            data_start=combined["date"].min().date(),
+            data_end=combined["date"].max().date(),
             total_points=n_days,
             cv_mae=avg_mae,
             cv_mape=avg_mape,
@@ -205,9 +209,9 @@ def train_model(product_id: int, business_id: int) -> dict:
             "product_id": product_id,
             "business_id": business_id,
             "data_points": n_days,
-            "data_start": str(combined["date"].min()),
-            "data_end": str(combined["date"].max()),
-            "model_type": type(model).__name__,
+            "data_start": str(combined["date"].min().date()),
+            "data_end": str(combined["date"].max().date()),
+            "model_type": type(outbound_model).__name__,
             "cv_mae": round(avg_mae, 2),
             "cv_mape": round(avg_mape, 2),
             "cv_splits": n_splits,

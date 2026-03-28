@@ -58,7 +58,8 @@ def predict_demand(
             "Please train a model first."
         )
 
-    model = artifact["model"]
+    outbound_model = artifact["model"]
+    inbound_model = artifact.get("inbound_model")
     meta = get_model_metadata(product_id, business_id)
 
     # ── Gather recent actuals for lag features ───────────────────
@@ -85,9 +86,18 @@ def predict_demand(
         last_known_inbound=last_inbound or None,
     )
 
-    # ── Predict ──────────────────────────────────────────────────
-    raw_preds = model.predict(X_future)
-    preds = np.maximum(raw_preds, 0).round(1)
+    # ── Predict outbound ─────────────────────────────────────────
+    raw_outbound = outbound_model.predict(X_future)
+    preds_outbound = np.maximum(raw_outbound, 0).round(1)
+
+    # ── Predict inbound ──────────────────────────────────────────
+    if inbound_model is not None:
+        raw_inbound = inbound_model.predict(X_future)
+        preds_inbound = np.maximum(raw_inbound, 0).round(1)
+    else:
+        # Fallback: use historical average inbound
+        avg_in = float(np.mean(last_inbound)) if last_inbound else 0.0
+        preds_inbound = np.full(len(future_dates), round(avg_in, 1))
 
     # ── Build projected stock curve ──────────────────────────────
     current_stock = get_current_stock(product_id, business_id)
@@ -97,13 +107,16 @@ def predict_demand(
     stock_out_date = None
     days_until_stockout = None
 
-    for i, (d, pred) in enumerate(zip(future_dates, preds)):
-        projected = max(projected - float(pred), 0)
+    for i, (d, pred_out, pred_in) in enumerate(
+        zip(future_dates, preds_outbound, preds_inbound)
+    ):
+        projected = max(projected + float(pred_in) - float(pred_out), 0)
         holiday_name = get_all_holiday_name(d)
 
         predictions.append({
             "date": str(d),
-            "predicted_outbound": float(pred),
+            "predicted_outbound": float(pred_out),
+            "predicted_inbound": float(pred_in),
             "projected_stock": round(projected, 1),
             "holiday_name": holiday_name,
         })
@@ -112,22 +125,27 @@ def predict_demand(
             stock_out_date = str(d)
             days_until_stockout = i + 1
 
-    total_pred = float(sum(preds))
+    total_pred_out = float(sum(preds_outbound))
+    total_pred_in = float(sum(preds_inbound))
 
     return {
         "product_id": product_id,
         "current_stock": current_stock,
+        "days_ahead": days_ahead,
+        "stockout_date": stock_out_date,
         "predictions": predictions,
         "model_info": {
-            "model_type": type(model).__name__,
+            "model_type": type(outbound_model).__name__,
             "trained_at": str(meta["trained_at"]) if meta else None,
             "data_points": meta["total_data_points"] if meta else None,
             "cv_mae": float(meta["cv_mae"]) if meta else None,
             "cv_mape": float(meta["cv_mape"]) if meta else None,
         },
         "summary": {
-            "total_predicted_outbound": round(total_pred, 1),
-            "avg_daily_outbound": round(total_pred / days_ahead, 1) if days_ahead else 0,
+            "total_predicted_outbound": round(total_pred_out, 1),
+            "total_predicted_inbound": round(total_pred_in, 1),
+            "avg_daily_outbound": round(total_pred_out / days_ahead, 1) if days_ahead else 0,
+            "avg_daily_inbound": round(total_pred_in / days_ahead, 1) if days_ahead else 0,
             "stock_out_date": stock_out_date,
             "days_until_stockout": days_until_stockout,
         },
