@@ -124,11 +124,22 @@ export default function ProductAnalyticsTab({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [days, setDays] = useState("90");
+  const [rangeMode, setRangeMode] = useState<"preset" | "custom">("preset");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
-  const fetchAnalytics = (d: string) => {
+  const fetchAnalytics = (
+    d: string,
+    customStart?: string,
+    customEnd?: string,
+  ) => {
     setLoading(true);
     setError("");
-    authFetch(`${API}/products/${productId}/analytics?days=${d}`)
+    let url = `${API}/products/${productId}/analytics?days=${d}`;
+    if (customStart && customEnd) {
+      url += `&start_date=${customStart}&end_date=${customEnd}`;
+    }
+    authFetch(url)
       .then((r) => {
         if (!r.ok) throw new Error("Failed to load analytics");
         return r.json();
@@ -145,7 +156,14 @@ export default function ProductAnalyticsTab({
 
   const handleDaysChange = (val: string) => {
     setDays(val);
+    setRangeMode("preset");
     fetchAnalytics(val);
+  };
+
+  const handleCustomRange = () => {
+    if (!startDate || !endDate) return;
+    setRangeMode("custom");
+    fetchAnalytics("3650", startDate, endDate);
   };
 
   /* ── Derived data ────────────────────────────────────────────── */
@@ -350,23 +368,54 @@ export default function ProductAnalyticsTab({
             {data.daily.length} days of data
           </Badge>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Select
-            className="w-35 h-8 text-xs"
-            value={days}
-            onChange={(e) => handleDaysChange(e.target.value)}
+            className={`w-35 h-8 text-xs ${rangeMode === "custom" ? "opacity-50" : ""}`}
+            value={rangeMode === "preset" ? days : ""}
+            onChange={(e) => {
+              if (e.target.value) handleDaysChange(e.target.value);
+            }}
           >
             <option value="30">Last 30 days</option>
             <option value="60">Last 60 days</option>
             <option value="90">Last 90 days</option>
             <option value="180">Last 6 months</option>
             <option value="365">Last year</option>
+            {rangeMode === "custom" && <option value="">Custom range</option>}
           </Select>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+            />
+            <span className="text-xs text-muted-foreground">to</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              disabled={!startDate || !endDate}
+              onClick={handleCustomRange}
+            >
+              Apply
+            </Button>
+          </div>
           <Button
             variant="outline"
             size="icon"
             className="h-8 w-8"
-            onClick={() => fetchAnalytics(days)}
+            onClick={() =>
+              rangeMode === "custom"
+                ? handleCustomRange()
+                : fetchAnalytics(days)
+            }
           >
             <RefreshCw size={14} />
           </Button>

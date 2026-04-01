@@ -674,7 +674,10 @@ export default function DemandForecastTab({
                         <XAxis
                           dataKey="date"
                           tick={{ fontSize: 11 }}
-                          tickFormatter={(v: string) => v.slice(5)}
+                          tickFormatter={(v: string) => {
+                            const d = new Date(v);
+                            return `${d.getDate()} ${d.toLocaleString("en", { month: "short" })}`;
+                          }}
                         />
                         <YAxis tick={{ fontSize: 11 }} />
                         <RTooltip
@@ -731,7 +734,10 @@ export default function DemandForecastTab({
                         <XAxis
                           dataKey="date"
                           tick={{ fontSize: 11 }}
-                          tickFormatter={(v: string) => v.slice(5)}
+                          tickFormatter={(v: string) => {
+                            const d = new Date(v);
+                            return `${d.getDate()} ${d.toLocaleString("en", { month: "short" })}`;
+                          }}
                         />
                         <YAxis tick={{ fontSize: 11 }} />
                         <RTooltip

@@ -261,7 +261,9 @@ def get_product_audit_log_endpoint(
 @router.get("/{product_id}/analytics")
 def get_product_analytics_endpoint(
     product_id: int,
-    days: int = Query(90, ge=7, le=365),
+    days: int = Query(90, ge=7, le=3650),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
     user_id: int = Depends(get_current_user_id),
 ):
     """Get daily-aggregated analytics (inbound, outbound, stock, reason breakdown) for a product."""
@@ -269,4 +271,4 @@ def get_product_analytics_endpoint(
     product = get_product_by_id(product_id, biz_id)
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    return get_product_analytics(product_id, biz_id, days)
+    return get_product_analytics(product_id, biz_id, days, start_date=start_date, end_date=end_date)

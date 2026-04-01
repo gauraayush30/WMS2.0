@@ -1467,13 +1467,28 @@ def get_dashboard_stats(business_id: int) -> dict:
     return stats
 
 
-def get_product_analytics(product_id: int, business_id: int, days: int = 90) -> dict:
+def get_product_analytics(product_id: int, business_id: int, days: int = 90,
+                          start_date: str | None = None, end_date: str | None = None) -> dict:
     """Return daily-aggregated transaction analytics for a single product.
 
     Includes daily inbound/outbound/net, closing stock, reason breakdown,
     and summary statistics.  Also merges uploaded ML history data.
+
+    If start_date/end_date are provided they take precedence over days.
     """
-    daily_query = text("""
+    # Build the date filter clause depending on which params are set
+    if start_date and end_date:
+        tx_date_filter = "AND t.transaction_at >= CAST(:start_date AS date) AND t.transaction_at < (CAST(:end_date AS date) + INTERVAL '1 day')"
+        ml_date_filter = "AND m.date >= CAST(:start_date AS date) AND m.date <= CAST(:end_date AS date)"
+        reason_tx_filter = "AND transaction_at >= CAST(:start_date AS date) AND transaction_at < (CAST(:end_date AS date) + INTERVAL '1 day')"
+        reason_ml_filter = "AND date >= CAST(:start_date AS date) AND date <= CAST(:end_date AS date)"
+    else:
+        tx_date_filter = "AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)"
+        ml_date_filter = "AND m.date >= (CURRENT_DATE - MAKE_INTERVAL(days => :days))"
+        reason_tx_filter = "AND transaction_at >= NOW() - MAKE_INTERVAL(days => :days)"
+        reason_ml_filter = "AND date >= (CURRENT_DATE - MAKE_INTERVAL(days => :days))"
+
+    daily_query = text(f"""
         WITH combined AS (
             SELECT
                 DATE(t.transaction_at)  AS date,
@@ -1484,7 +1499,7 @@ def get_product_analytics(product_id: int, business_id: int, days: int = 90) -> 
             FROM inventory_transactions t
             WHERE t.product_id  = :pid
               AND t.business_id = :biz
-              AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+              {tx_date_filter}
 
             UNION ALL
 
@@ -1497,7 +1512,7 @@ def get_product_analytics(product_id: int, business_id: int, days: int = 90) -> 
             FROM ml_uploaded_history m
             WHERE m.product_id  = :pid
               AND m.business_id = :biz
-              AND m.date >= (CURRENT_DATE - MAKE_INTERVAL(days => :days))
+              {ml_date_filter}
         )
         SELECT
             date,
@@ -1548,13 +1563,13 @@ def get_product_analytics(product_id: int, business_id: int, days: int = 90) -> 
         FROM combined
     """)
 
-    reason_query = text("""
+    reason_query = text(f"""
         WITH combined AS (
             SELECT reason, stock_adjusted, transaction_at
             FROM inventory_transactions
             WHERE product_id  = :pid
               AND business_id = :biz
-              AND transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+              {reason_tx_filter}
 
             UNION ALL
 
@@ -1565,7 +1580,7 @@ def get_product_analytics(product_id: int, business_id: int, days: int = 90) -> 
             FROM ml_uploaded_history
             WHERE product_id  = :pid
               AND business_id = :biz
-              AND date >= (CURRENT_DATE - MAKE_INTERVAL(days => :days))
+              {reason_ml_filter}
         )
         SELECT
             reason,
@@ -1576,7 +1591,10 @@ def get_product_analytics(product_id: int, business_id: int, days: int = 90) -> 
         ORDER BY total_qty DESC
     """)
 
-    params = {"pid": product_id, "biz": business_id, "days": days}
+    params: dict = {"pid": product_id, "biz": business_id, "days": days}
+    if start_date and end_date:
+        params["start_date"] = start_date
+        params["end_date"] = end_date
 
     with engine.connect() as conn:
         daily_rows = conn.execute(daily_query, params).mappings().all()
