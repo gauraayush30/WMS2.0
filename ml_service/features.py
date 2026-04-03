@@ -3,9 +3,12 @@ Feature engineering for the ML stock prediction model.
 
 Builds a full feature matrix from a daily time-series DataFrame by combining:
   - Temporal features (day of week, month, quarter, …)
+  - Cyclical temporal features (sin/cos encodings for periodicity)
   - Indian holiday / festival features incl. ±7-day proximity window
-  - Lag & rolling-window features (7d/30d averages, std)
-  - Trend features (7-day linear slope)
+  - Shifted lag features (actual lagged values: 1d, 2d, 3d, 7d, 14d)
+  - Rolling-window statistics (3d, 7d, 14d, 30d, 60d averages, std, median, EWM)
+  - Ratio / momentum features (short vs long-term averages)
+  - Trend features (7d, 14d, 30d linear slopes)
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import pandas as pd
 
 from indian_calendar import get_holiday_features_for_dates
 
-# ── Feature column names (excluding lag/trend which need history) ────────────
+# ── Feature column names ────────────────────────────────────────────────────
 
 TEMPORAL_FEATURES = [
     "day_of_week",
@@ -27,6 +30,17 @@ TEMPORAL_FEATURES = [
     "week_of_year",
     "is_weekend",
     "quarter",
+]
+
+CYCLICAL_FEATURES = [
+    "sin_day_of_week",
+    "cos_day_of_week",
+    "sin_month",
+    "cos_month",
+    "sin_day_of_year",
+    "cos_day_of_year",
+    "sin_week_of_year",
+    "cos_week_of_year",
 ]
 
 HOLIDAY_FEATURES = [
@@ -41,22 +55,64 @@ HOLIDAY_FEATURES = [
     "festival_season",
 ]
 
-LAG_FEATURES = [
+SHIFTED_LAG_FEATURES = [
+    "outbound_lag_1",
+    "outbound_lag_2",
+    "outbound_lag_3",
+    "outbound_lag_7",
+    "outbound_lag_14",
+    "inbound_lag_1",
+    "inbound_lag_7",
+]
+
+WEEKDAY_FEATURES = [
+    "outbound_same_dow_4w_avg",
+    "outbound_same_dow_4w_median",
+]
+
+ROLLING_FEATURES = [
+    "outbound_3d_avg",
     "outbound_7d_avg",
+    "outbound_14d_avg",
     "outbound_30d_avg",
-    "inbound_7d_avg",
+    "outbound_7d_median",
     "outbound_7d_std",
+    "outbound_30d_std",
+    "outbound_7d_max",
+    "outbound_7d_min",
+    "outbound_ewm_7",
+    "outbound_ewm_30",
+    "inbound_7d_avg",
+    "inbound_30d_avg",
+]
+
+RATIO_FEATURES = [
+    "outbound_ratio_7_30",
+    "net_flow_7d",
 ]
 
 TREND_FEATURES = [
     "outbound_trend_7d",
+    "outbound_trend_14d",
+    "days_since_start",
 ]
 
-ALL_FEATURES = TEMPORAL_FEATURES + HOLIDAY_FEATURES + LAG_FEATURES + TREND_FEATURES
+ALL_FEATURES = (
+    TEMPORAL_FEATURES
+    + CYCLICAL_FEATURES
+    + HOLIDAY_FEATURES
+    + SHIFTED_LAG_FEATURES
+    + WEEKDAY_FEATURES
+    + ROLLING_FEATURES
+    + RATIO_FEATURES
+    + TREND_FEATURES
+)
 
-# Features that can be computed without historical lag data
-# (used for future-date prediction where we don't have actuals yet)
-PREDICTION_FEATURES = TEMPORAL_FEATURES + HOLIDAY_FEATURES
+# Features computable without historical lag data (for future-date prediction)
+PREDICTION_FEATURES = TEMPORAL_FEATURES + CYCLICAL_FEATURES + HOLIDAY_FEATURES
+
+# Rows to drop from the start during training (insufficient lag history)
+LAG_WARMUP_ROWS = 7
 
 
 def _add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -96,47 +152,132 @@ def _add_holiday_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
+def _add_cyclical_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add sin/cos cyclical encodings so the model understands periodicity."""
+    df = df.copy()
+    df["sin_day_of_week"] = np.sin(2 * np.pi * df["day_of_week"] / 7)
+    df["cos_day_of_week"] = np.cos(2 * np.pi * df["day_of_week"] / 7)
+    df["sin_month"] = np.sin(2 * np.pi * (df["month"] - 1) / 12)
+    df["cos_month"] = np.cos(2 * np.pi * (df["month"] - 1) / 12)
+    df["sin_day_of_year"] = np.sin(2 * np.pi * df["day_of_year"] / 365.25)
+    df["cos_day_of_year"] = np.cos(2 * np.pi * df["day_of_year"] / 365.25)
+    df["sin_week_of_year"] = np.sin(2 * np.pi * df["week_of_year"] / 52)
+    df["cos_week_of_year"] = np.cos(2 * np.pi * df["week_of_year"] / 52)
+    return df
+
+
+def _add_shifted_lag_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add actual lagged values shifted by N days (no target leakage)."""
+    df = df.copy()
+    df["outbound_lag_1"] = df["outbound_qty"].shift(1)
+    df["outbound_lag_2"] = df["outbound_qty"].shift(2)
+    df["outbound_lag_3"] = df["outbound_qty"].shift(3)
+    df["outbound_lag_7"] = df["outbound_qty"].shift(7)
+    df["outbound_lag_14"] = df["outbound_qty"].shift(14)
+    df["inbound_lag_1"] = df["inbound_qty"].shift(1)
+    df["inbound_lag_7"] = df["inbound_qty"].shift(7)
+    return df
+
+
+def _add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add rolling-window lag features.  Requires ``outbound_qty`` and
-    ``inbound_qty`` columns.  NaN rows at the start (before the window
-    fills) will be forward-filled then back-filled.
+    Add rolling-window statistics using the natural rolling window.
+    Uses min_periods matching partial window for early rows.
     """
     df = df.copy()
-    df["outbound_7d_avg"] = df["outbound_qty"].rolling(7, min_periods=1).mean()
-    df["outbound_30d_avg"] = df["outbound_qty"].rolling(30, min_periods=1).mean()
-    df["inbound_7d_avg"] = df["inbound_qty"].rolling(7, min_periods=1).mean()
-    df["outbound_7d_std"] = df["outbound_qty"].rolling(7, min_periods=1).std().fillna(0)
+    out = df["outbound_qty"]
+    inp = df["inbound_qty"]
+
+    # Rolling averages at multiple horizons
+    df["outbound_3d_avg"] = out.rolling(3, min_periods=1).mean()
+    df["outbound_7d_avg"] = out.rolling(7, min_periods=1).mean()
+    df["outbound_14d_avg"] = out.rolling(14, min_periods=1).mean()
+    df["outbound_30d_avg"] = out.rolling(30, min_periods=1).mean()
+
+    # Rolling median, std, min, max
+    df["outbound_7d_median"] = out.rolling(7, min_periods=1).median()
+    df["outbound_7d_std"] = out.rolling(7, min_periods=1).std().fillna(0)
+    df["outbound_30d_std"] = out.rolling(30, min_periods=1).std().fillna(0)
+    df["outbound_7d_max"] = out.rolling(7, min_periods=1).max()
+    df["outbound_7d_min"] = out.rolling(7, min_periods=1).min()
+
+    # Exponential weighted moving average (reacts faster to recent changes)
+    df["outbound_ewm_7"] = out.ewm(span=7, min_periods=1).mean()
+    df["outbound_ewm_30"] = out.ewm(span=30, min_periods=1).mean()
+
+    # Inbound rolling
+    df["inbound_7d_avg"] = inp.rolling(7, min_periods=1).mean()
+    df["inbound_30d_avg"] = inp.rolling(30, min_periods=1).mean()
+
+    return df
+
+
+def _add_weekday_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add same-day-of-week historical averages.  Captures weekly seasonality
+    e.g. Mondays are always high, Sundays always low.
+    """
+    df = df.copy()
+    out = df["outbound_qty"].values
+    dow = pd.to_datetime(df["date"]).dt.dayofweek.values
+
+    avg_4w = np.zeros(len(df))
+    med_4w = np.zeros(len(df))
+
+    for i in range(len(df)):
+        target_dow = dow[i]
+        # Collect same-weekday values in the last 28 days (4 weeks)
+        same_dow_vals = []
+        for j in range(max(0, i - 28), i):
+            if dow[j] == target_dow:
+                same_dow_vals.append(out[j])
+        if same_dow_vals:
+            avg_4w[i] = float(np.mean(same_dow_vals))
+            med_4w[i] = float(np.median(same_dow_vals))
+        else:
+            # Fallback to overall recent average
+            recent = out[max(0, i - 7):i]
+            avg_4w[i] = float(np.mean(recent)) if len(recent) > 0 else 0.0
+            med_4w[i] = avg_4w[i]
+
+    df["outbound_same_dow_4w_avg"] = avg_4w
+    df["outbound_same_dow_4w_median"] = med_4w
+    return df
+
+
+def _add_ratio_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add momentum / ratio features that capture acceleration and net flow."""
+    df = df.copy()
+    out_30 = df["outbound_30d_avg"].replace(0, np.nan)
+    df["outbound_ratio_7_30"] = (df["outbound_7d_avg"] / out_30).fillna(1.0)
+    df["net_flow_7d"] = df["inbound_7d_avg"] - df["outbound_7d_avg"]
     return df
 
 
 def _add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add a 7-day linear slope feature for trend detection.
-    Uses a rolling OLS-style calculation via numpy.
+    Add linear slope features at 7d and 14d windows,
+    plus days_since_start for long-term trend capture.
     """
     df = df.copy()
-    window = 7
-    slopes = []
     outbound = df["outbound_qty"].values
 
-    for i in range(len(outbound)):
-        if i < window - 1:
-            # Not enough history – use 0
-            slopes.append(0.0)
-        else:
-            segment = outbound[i - window + 1 : i + 1]
-            x = np.arange(window, dtype=float)
-            x_mean = x.mean()
-            y_mean = segment.mean()
-            denom = ((x - x_mean) ** 2).sum()
-            if denom == 0:
+    for window, col in [
+        (7, "outbound_trend_7d"),
+        (14, "outbound_trend_14d"),
+    ]:
+        slopes: list[float] = []
+        for i in range(len(outbound)):
+            if i < window - 1:
                 slopes.append(0.0)
             else:
-                slope = ((x - x_mean) * (segment - y_mean)).sum() / denom
-                slopes.append(round(float(slope), 4))
+                segment = outbound[i - window + 1 : i + 1]
+                slopes.append(round(_compute_slope(segment), 4))
+        df[col] = slopes
 
-    df["outbound_trend_7d"] = slopes
+    dates = pd.to_datetime(df["date"])
+    df["days_since_start"] = (dates - dates.min()).dt.days
+
     return df
 
 
@@ -145,73 +286,149 @@ def _add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
 def build_feature_matrix(daily_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
     """
     Given a daily DataFrame with columns ``[date, inbound_qty, outbound_qty]``,
-    return ``(X, y_outbound, y_inbound)`` where ``X`` is the feature matrix,
-    ``y_outbound`` is the outbound target, and ``y_inbound`` is the inbound target.
+    return ``(X, y_outbound, y_inbound)`` where ``X`` is the feature matrix.
 
-    Rows with insufficient lag history (first 7 days) are kept but use
-    partial-window statistics so no data is discarded.
+    Drops the first ``LAG_WARMUP_ROWS`` rows where lag features are
+    unreliable (partial-window noise).
     """
     df = daily_df.copy().sort_values("date").reset_index(drop=True)
 
     df = _add_temporal_features(df)
+    df = _add_cyclical_features(df)
     df = _add_holiday_features(df)
-    df = _add_lag_features(df)
+    df = _add_shifted_lag_features(df)
+    df = _add_weekday_features(df)
+    df = _add_rolling_features(df)
+    df = _add_ratio_features(df)
     df = _add_trend_features(df)
 
-    X = df[ALL_FEATURES].astype(float)
+    # Drop warmup rows (but never more than 25 % of the data)
+    warmup = min(LAG_WARMUP_ROWS, len(df) // 4)
+    df = df.iloc[warmup:].reset_index(drop=True)
+
+    X = df[ALL_FEATURES].astype(float).fillna(0)
     y_outbound = df["outbound_qty"].astype(float)
     y_inbound = df["inbound_qty"].astype(float)
 
     return X, y_outbound, y_inbound
 
 
-def build_prediction_features(future_dates: list[date], last_known_outbound: list[float] | None = None, last_known_inbound: list[float] | None = None) -> pd.DataFrame:
+def build_prediction_features(
+    future_dates: list[date],
+    last_known_outbound: list[float] | None = None,
+    last_known_inbound: list[float] | None = None,
+) -> pd.DataFrame:
     """
     Build a feature matrix for future dates (where actual outbound/inbound
-    are unknown).
-
-    For lag features on future dates we use the ``last_known_*`` series
-    (most recent actuals) to seed the rolling windows, then propagate
-    predictions forward.
-
-    If ``last_known_*`` is None, lag features are filled with 0.
+    are unknown).  Lag / rolling features are seeded from last-known actuals.
     """
     df = pd.DataFrame({"date": future_dates})
     df = _add_temporal_features(df)
+    df = _add_cyclical_features(df)
     df = _add_holiday_features(df)
 
-    # Seed lag features from last known actuals
-    if last_known_outbound and len(last_known_outbound) >= 7:
-        avg_7 = float(np.mean(last_known_outbound[-7:]))
-        avg_30 = float(np.mean(last_known_outbound[-30:])) if len(last_known_outbound) >= 30 else avg_7
-        std_7 = float(np.std(last_known_outbound[-7:]))
-        trend = _compute_slope(last_known_outbound[-7:])
-    else:
-        avg_7 = avg_30 = std_7 = trend = 0.0
+    out = list(last_known_outbound) if last_known_outbound else []
+    inp = list(last_known_inbound) if last_known_inbound else []
 
-    if last_known_inbound and len(last_known_inbound) >= 7:
-        in_avg_7 = float(np.mean(last_known_inbound[-7:]))
-    else:
-        in_avg_7 = 0.0
+    # ── Helpers ──────────────────────────────────────────────────
+    def _tail(arr: list, n: int) -> list:
+        return arr[-n:] if len(arr) >= n else arr
 
-    df["outbound_7d_avg"] = avg_7
-    df["outbound_30d_avg"] = avg_30
-    df["inbound_7d_avg"] = in_avg_7
-    df["outbound_7d_std"] = std_7
-    df["outbound_trend_7d"] = trend
+    def _mean(arr: list, n: int) -> float:
+        s = _tail(arr, n)
+        return float(np.mean(s)) if s else 0.0
+
+    def _std(arr: list, n: int) -> float:
+        s = _tail(arr, n)
+        return float(np.std(s, ddof=1)) if len(s) > 1 else 0.0
+
+    def _med(arr: list, n: int) -> float:
+        s = _tail(arr, n)
+        return float(np.median(s)) if s else 0.0
+
+    def _safe(arr: list, idx: int) -> float:
+        return float(arr[-idx]) if len(arr) >= idx else 0.0
+
+    # ── Shifted lag features ─────────────────────────────────────
+    df["outbound_lag_1"] = _safe(out, 1)
+    df["outbound_lag_2"] = _safe(out, 2)
+    df["outbound_lag_3"] = _safe(out, 3)
+    df["outbound_lag_7"] = _safe(out, 7)
+    df["outbound_lag_14"] = _safe(out, 14)
+    df["inbound_lag_1"] = _safe(inp, 1)
+    df["inbound_lag_7"] = _safe(inp, 7)
+
+    # ── Weekday features ─────────────────────────────────────────
+    dow_series = pd.to_datetime(df["date"]).dt.dayofweek
+    weekday_vals: list[float] = []
+    weekday_meds: list[float] = []
+    for _, row_date in enumerate(future_dates):
+        target_dow = row_date.weekday()
+        same_dow = [out[j] for j in range(len(out))
+                    if j >= len(out) - 28
+                    and (len(out) - j) % 7 == 0
+                    or (len(out) > j and
+                        pd.Timestamp(row_date).dayofweek == target_dow)]
+        # Simpler: just pick values at offsets -7, -14, -21, -28
+        same_dow_simple = []
+        for offset in [7, 14, 21, 28]:
+            if len(out) >= offset:
+                same_dow_simple.append(out[-offset])
+        if same_dow_simple:
+            weekday_vals.append(float(np.mean(same_dow_simple)))
+            weekday_meds.append(float(np.median(same_dow_simple)))
+        else:
+            avg = _mean(out, 7)
+            weekday_vals.append(avg)
+            weekday_meds.append(avg)
+    df["outbound_same_dow_4w_avg"] = weekday_vals[:len(df)]
+    df["outbound_same_dow_4w_median"] = weekday_meds[:len(df)]
+
+    # ── Rolling features ─────────────────────────────────────────
+    df["outbound_3d_avg"] = _mean(out, 3)
+    df["outbound_7d_avg"] = _mean(out, 7)
+    df["outbound_14d_avg"] = _mean(out, 14)
+    df["outbound_30d_avg"] = _mean(out, 30)
+    df["outbound_7d_median"] = _med(out, 7)
+    df["outbound_7d_std"] = _std(out, 7)
+    df["outbound_30d_std"] = _std(out, 30)
+    df["outbound_7d_max"] = float(max(_tail(out, 7))) if out else 0.0
+    df["outbound_7d_min"] = float(min(_tail(out, 7))) if out else 0.0
+
+    if out:
+        s = pd.Series(out)
+        df["outbound_ewm_7"] = float(s.ewm(span=7, min_periods=1).mean().iloc[-1])
+        df["outbound_ewm_30"] = float(s.ewm(span=30, min_periods=1).mean().iloc[-1])
+    else:
+        df["outbound_ewm_7"] = 0.0
+        df["outbound_ewm_30"] = 0.0
+
+    df["inbound_7d_avg"] = _mean(inp, 7)
+    df["inbound_30d_avg"] = _mean(inp, 30)
+
+    # ── Ratio features ───────────────────────────────────────────
+    avg_7 = _mean(out, 7)
+    avg_30 = _mean(out, 30)
+    df["outbound_ratio_7_30"] = (avg_7 / avg_30) if avg_30 > 0 else 1.0
+    df["net_flow_7d"] = _mean(inp, 7) - avg_7
+
+    # ── Trend features ───────────────────────────────────────────
+    df["outbound_trend_7d"] = _compute_slope(out[-7:]) if len(out) >= 7 else 0.0
+    df["outbound_trend_14d"] = _compute_slope(out[-14:]) if len(out) >= 14 else 0.0
+    df["days_since_start"] = 0  # not meaningful for future predictions
 
     return df[ALL_FEATURES].astype(float)
 
 
-def _compute_slope(values: list[float]) -> float:
-    """Simple linear regression slope over a list of values."""
+def _compute_slope(values) -> float:
+    """Simple linear regression slope over a list/array of values."""
+    values = np.asarray(values, dtype=float)
     n = len(values)
     if n < 2:
         return 0.0
     x = np.arange(n, dtype=float)
-    y = np.array(values, dtype=float)
-    x_m, y_m = x.mean(), y.mean()
+    x_m, y_m = x.mean(), values.mean()
     denom = ((x - x_m) ** 2).sum()
     if denom == 0:
         return 0.0
-    return float(((x - x_m) * (y - y_m)).sum() / denom)
+    return float(((x - x_m) * (values - y_m)).sum() / denom)

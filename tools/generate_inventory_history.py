@@ -355,7 +355,7 @@ def parse_args():
     p.add_argument("--product-name", default="Alaskan Cod",   help="Product display name")
     p.add_argument("--sku-code",     default="SKU019",        help="SKU code")
     p.add_argument("--start",        default="2024-01-01",    help="Start date YYYY-MM-DD")
-    p.add_argument("--end",          default="2026-03-28",    help="End date   YYYY-MM-DD")
+    p.add_argument("--end",          default="2026-04-02",    help="End date   YYYY-MM-DD")
     p.add_argument("--initial-stock",type=int, default=500,   help="Opening stock level")
     p.add_argument("--base-demand",  type=float, default=55.0,help="Average daily outbound units")
     p.add_argument("--out-dir",      default=str(Path.home() / "Downloads"), help="Output directory")

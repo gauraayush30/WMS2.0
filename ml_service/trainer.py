@@ -1,18 +1,22 @@
 """
-On-demand model training pipeline.
+On-demand model training pipeline (enhanced).
 
 Flow:
   1. Fetch auto-aggregated data from inventory_transactions
   2. Merge with CSV-uploaded historical data (if any)
   3. De-duplicate by date (uploaded data takes precedence for overlapping dates)
-  4. Build feature matrix
-  5. Train GradientBoostingRegressor (or RandomForest for small datasets)
-  6. Cross-validate with TimeSeriesSplit
+  4. Build feature matrix (52 features: temporal, cyclical, holiday, lag, rolling,
+     ratio, trend)
+  5. Search across multiple model configurations with TimeSeriesSplit CV
+  6. Pick the best config (lowest MAE), retrain on full data
   7. Persist model + metadata
+
+Supports XGBoost (preferred) with early stopping, falls back to sklearn GBR.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -31,6 +35,18 @@ from db import (
     update_model_status,
 )
 from features import build_feature_matrix, ALL_FEATURES
+
+logger = logging.getLogger(__name__)
+
+# ── XGBoost availability ────────────────────────────────────────────────────
+
+try:
+    from xgboost import XGBRegressor
+    HAS_XGBOOST = True
+    logger.info("XGBoost available – will use XGBRegressor")
+except ImportError:
+    HAS_XGBOOST = False
+    logger.info("XGBoost not installed – falling back to sklearn")
 
 
 def _merge_data_sources(
@@ -93,9 +109,212 @@ def _get_model_path(product_id: int, business_id: int) -> Path:
     return MODEL_STORAGE_PATH / f"product_{product_id}_biz_{business_id}.joblib"
 
 
+# ── Candidate model configurations ──────────────────────────────────────────
+
+def _get_candidates(n_days: int) -> list[dict]:
+    """Return model configurations to evaluate, ordered by expected quality."""
+    if HAS_XGBOOST:
+        if n_days >= 300:
+            return [
+                {
+                    "name": "xgb_huber_deep",
+                    "type": "xgb",
+                    "params": {
+                        "n_estimators": 3000, "max_depth": 6,
+                        "learning_rate": 0.01, "subsample": 0.8,
+                        "colsample_bytree": 0.8, "min_child_weight": 3,
+                        "reg_alpha": 0.01, "reg_lambda": 0.3,
+                        "gamma": 0.1,
+                        "objective": "reg:pseudohubererror",
+                        "random_state": 42, "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": 100,
+                },
+                {
+                    "name": "xgb_huber_balanced",
+                    "type": "xgb",
+                    "params": {
+                        "n_estimators": 2000, "max_depth": 5,
+                        "learning_rate": 0.01, "subsample": 0.85,
+                        "colsample_bytree": 0.8, "min_child_weight": 3,
+                        "reg_alpha": 0.005, "reg_lambda": 0.2,
+                        "gamma": 0.05,
+                        "objective": "reg:pseudohubererror",
+                        "random_state": 42, "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": 80,
+                },
+                {
+                    "name": "xgb_sqe_deep",
+                    "type": "xgb",
+                    "params": {
+                        "n_estimators": 2500, "max_depth": 6,
+                        "learning_rate": 0.008, "subsample": 0.8,
+                        "colsample_bytree": 0.85, "min_child_weight": 3,
+                        "reg_alpha": 0.01, "reg_lambda": 0.3,
+                        "gamma": 0.05,
+                        "random_state": 42, "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": 100,
+                },
+                {
+                    "name": "xgb_sqe_shallow",
+                    "type": "xgb",
+                    "params": {
+                        "n_estimators": 2000, "max_depth": 4,
+                        "learning_rate": 0.015, "subsample": 0.9,
+                        "colsample_bytree": 0.9, "min_child_weight": 2,
+                        "reg_alpha": 0.0, "reg_lambda": 0.1,
+                        "gamma": 0.0,
+                        "random_state": 42, "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": 80,
+                },
+            ]
+        elif n_days >= 100:
+            return [
+                {
+                    "name": "xgb_huber_med",
+                    "type": "xgb",
+                    "params": {
+                        "n_estimators": 2000, "max_depth": 5,
+                        "learning_rate": 0.01, "subsample": 0.85,
+                        "colsample_bytree": 0.8, "min_child_weight": 2,
+                        "reg_alpha": 0.005, "reg_lambda": 0.2,
+                        "gamma": 0.05,
+                        "objective": "reg:pseudohubererror",
+                        "random_state": 42, "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": 80,
+                },
+                {
+                    "name": "xgb_sqe_med",
+                    "type": "xgb",
+                    "params": {
+                        "n_estimators": 2000, "max_depth": 5,
+                        "learning_rate": 0.01, "subsample": 0.85,
+                        "colsample_bytree": 0.85, "min_child_weight": 2,
+                        "reg_alpha": 0.005, "reg_lambda": 0.2,
+                        "gamma": 0.05,
+                        "random_state": 42, "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": 80,
+                },
+                {
+                    "name": "xgb_sqe_med_shallow",
+                    "type": "xgb",
+                    "params": {
+                        "n_estimators": 1500, "max_depth": 4,
+                        "learning_rate": 0.02, "subsample": 0.9,
+                        "colsample_bytree": 0.9, "min_child_weight": 2,
+                        "reg_alpha": 0.0, "reg_lambda": 0.1,
+                        "gamma": 0.0,
+                        "random_state": 42, "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": 60,
+                },
+            ]
+        else:
+            return [
+                {
+                    "name": "xgb_small_huber",
+                    "type": "xgb",
+                    "params": {
+                        "n_estimators": 1000, "max_depth": 4,
+                        "learning_rate": 0.02, "subsample": 0.9,
+                        "colsample_bytree": 0.9, "min_child_weight": 2,
+                        "reg_alpha": 0.0, "reg_lambda": 0.1,
+                        "objective": "reg:pseudohubererror",
+                        "random_state": 42, "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": 40,
+                },
+                {
+                    "name": "xgb_small_sqe",
+                    "type": "xgb",
+                    "params": {
+                        "n_estimators": 1000, "max_depth": 5,
+                        "learning_rate": 0.02, "subsample": 0.85,
+                        "colsample_bytree": 0.85, "min_child_weight": 2,
+                        "reg_alpha": 0.0, "reg_lambda": 0.1,
+                        "random_state": 42, "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": 40,
+                },
+            ]
+    else:
+        # Sklearn fallback
+        if n_days >= 100:
+            return [
+                {
+                    "name": "gbr_huber",
+                    "type": "gbr",
+                    "params": {
+                        "n_estimators": 1500, "max_depth": 5,
+                        "learning_rate": 0.01, "subsample": 0.8,
+                        "loss": "huber",
+                        "min_samples_leaf": 5, "min_samples_split": 10,
+                        "random_state": 42,
+                    },
+                    "early_stopping_rounds": None,
+                },
+                {
+                    "name": "gbr_sqe",
+                    "type": "gbr",
+                    "params": {
+                        "n_estimators": 2000, "max_depth": 4,
+                        "learning_rate": 0.008, "subsample": 0.85,
+                        "min_samples_leaf": 5, "min_samples_split": 10,
+                        "random_state": 42,
+                    },
+                    "early_stopping_rounds": None,
+                },
+            ]
+        else:
+            return [
+                {
+                    "name": "rf_deep",
+                    "type": "rf",
+                    "params": {
+                        "n_estimators": 500, "max_depth": 12,
+                        "min_samples_leaf": 3, "random_state": 42,
+                        "n_jobs": -1,
+                    },
+                    "early_stopping_rounds": None,
+                },
+                {
+                    "name": "gbr_small",
+                    "type": "gbr",
+                    "params": {
+                        "n_estimators": 500, "max_depth": 4,
+                        "learning_rate": 0.05, "subsample": 0.9,
+                        "loss": "huber",
+                        "min_samples_leaf": 5, "random_state": 42,
+                    },
+                    "early_stopping_rounds": None,
+                },
+            ]
+
+
+def _create_model(config: dict):
+    """Instantiate a model from a configuration dict."""
+    if config["type"] == "xgb":
+        params = dict(config["params"])
+        if config.get("early_stopping_rounds"):
+            params["early_stopping_rounds"] = config["early_stopping_rounds"]
+        return XGBRegressor(**params)
+    elif config["type"] == "gbr":
+        return GradientBoostingRegressor(**config["params"])
+    else:
+        return RandomForestRegressor(**config["params"])
+
+
 def train_model(product_id: int, business_id: int) -> dict:
     """
     Train (or re-train) a demand prediction model for a single product.
+
+    Evaluates multiple model configurations via TimeSeriesSplit CV,
+    picks the one with the lowest MAE, and retrains on the full dataset.
 
     Returns a dict with training metrics and metadata.
     Raises ValueError if insufficient data.
@@ -126,72 +345,159 @@ def train_model(product_id: int, business_id: int) -> dict:
 
         # ── 2. Build features ────────────────────────────────────────
         X, y_outbound, y_inbound = build_feature_matrix(combined)
+        n_samples = len(X)
+        logger.info(
+            f"Built feature matrix: {n_samples} samples, "
+            f"{len(ALL_FEATURES)} features (from {n_days} raw days)"
+        )
 
-        # ── 3. Choose model ──────────────────────────────────────────
-        def _make_model(n: int):
-            if n >= 60:
-                return GradientBoostingRegressor(
-                    n_estimators=200,
-                    max_depth=5,
-                    learning_rate=0.1,
-                    subsample=0.8,
-                    random_state=42,
-                )
-            return RandomForestRegressor(
-                n_estimators=100,
-                max_depth=8,
-                random_state=42,
+        # ── 3. Target transforms (log1p for skewed demand) ──────────
+        y_out_log = np.log1p(y_outbound)
+        y_in_log = np.log1p(y_inbound)
+
+        # ── 4. Naive baseline (for comparison) ───────────────────────
+        if "outbound_7d_avg" in X.columns:
+            baseline_mae = mean_absolute_error(y_outbound, X["outbound_7d_avg"])
+        else:
+            baseline_mae = float(y_outbound.std())
+        logger.info(f"Naive baseline MAE (7d avg): {baseline_mae:.3f}")
+
+        # ── 5. Search across model configurations ────────────────────
+        candidates = _get_candidates(n_days)
+        n_splits = min(5, max(2, n_samples // 60))
+        # Gap prevents lag-feature contamination between train/test folds
+        cv_gap = min(7, n_samples // (n_splits * 4))
+        tscv = TimeSeriesSplit(n_splits=n_splits, gap=cv_gap)
+
+        best_overall_mae = float("inf")
+        best_config_idx = 0
+        all_results: list[dict] = []
+
+        for ci, config in enumerate(candidates):
+            logger.info(
+                f"  Config {ci + 1}/{len(candidates)}: {config['name']}"
+            )
+            cv_maes: list[float] = []
+            cv_mapes: list[float] = []
+            best_iters: list[int] = []
+
+            for fold_i, (train_idx, test_idx) in enumerate(tscv.split(X)):
+                X_train = X.iloc[train_idx]
+                X_test = X.iloc[test_idx]
+                y_train_log = y_out_log.iloc[train_idx]
+                y_test_actual = y_outbound.iloc[test_idx]
+
+                model = _create_model(config)
+
+                if config["type"] == "xgb" and config.get("early_stopping_rounds"):
+                    y_test_log = y_out_log.iloc[test_idx]
+                    model.fit(
+                        X_train, y_train_log,
+                        eval_set=[(X_test, y_test_log)],
+                        verbose=False,
+                    )
+                    bi = getattr(model, "best_iteration", None)
+                    best_iters.append(
+                        bi if bi is not None else config["params"]["n_estimators"]
+                    )
+                else:
+                    model.fit(X_train, y_train_log)
+
+                # Predict in log space, convert back to original scale
+                preds_log = model.predict(X_test)
+                preds = np.maximum(np.expm1(preds_log), 0)
+
+                mae = mean_absolute_error(y_test_actual, preds)
+                cv_maes.append(mae)
+
+                # Weighted MAPE (avoids zero-division blow-up)
+                total_actual = y_test_actual.sum()
+                if total_actual > 0:
+                    mape = float(
+                        np.sum(np.abs(y_test_actual - preds)) / total_actual * 100
+                    )
+                else:
+                    mape = 0.0
+                cv_mapes.append(mape)
+
+            avg_mae = float(np.mean(cv_maes))
+            avg_mape = float(np.mean(cv_mapes))
+            logger.info(
+                f"    → MAE={avg_mae:.3f}  MAPE={avg_mape:.1f}%  "
+                f"(per-fold MAEs: {[round(m, 2) for m in cv_maes]})"
             )
 
-        outbound_model = _make_model(n_days)
-        inbound_model = _make_model(n_days)
+            all_results.append({
+                "name": config["name"],
+                "avg_mae": avg_mae,
+                "avg_mape": avg_mape,
+                "cv_maes": cv_maes,
+                "cv_mapes": cv_mapes,
+                "best_iters": best_iters,
+            })
 
-        # ── 4. Cross-validate with TimeSeriesSplit ───────────────────
-        n_splits = min(5, max(2, n_days // 30))
-        tscv = TimeSeriesSplit(n_splits=n_splits)
+            if avg_mae < best_overall_mae:
+                best_overall_mae = avg_mae
+                best_config_idx = ci
 
-        cv_maes: list[float] = []
-        cv_mapes: list[float] = []
+        best_config = candidates[best_config_idx]
+        best_result = all_results[best_config_idx]
+        avg_mae = best_result["avg_mae"]
+        avg_mape = best_result["avg_mape"]
 
-        for train_idx, test_idx in tscv.split(X):
-            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-            y_train, y_test = y_outbound.iloc[train_idx], y_outbound.iloc[test_idx]
+        logger.info(
+            f"Best config: {best_config['name']} "
+            f"(MAE={avg_mae:.3f}, MAPE={avg_mape:.1f}%)"
+        )
 
-            outbound_model.fit(X_train, y_train)
-            preds = outbound_model.predict(X_test)
-            preds = np.maximum(preds, 0)  # demand can't be negative
+        # ── 5. Retrain on full data with best config ─────────────────
+        final_params = dict(best_config["params"])
 
-            mae = mean_absolute_error(y_test, preds)
-            cv_maes.append(mae)
+        # Use averaged best iteration from CV (+10 % buffer) for XGBoost
+        if best_result["best_iters"]:
+            avg_iter = int(np.mean(best_result["best_iters"]) * 1.1)
+            final_params["n_estimators"] = max(avg_iter, 100)
 
-            # MAPE – avoid division by zero
-            mask = y_test > 0
-            if mask.sum() > 0:
-                mape = float(np.mean(np.abs((y_test[mask] - preds[mask]) / y_test[mask])) * 100)
-            else:
-                mape = 0.0
-            cv_mapes.append(mape)
+        # Remove early stopping for full retrain (no eval set)
+        final_config = {
+            "type": best_config["type"],
+            "params": final_params,
+            "early_stopping_rounds": None,
+            "name": best_config["name"],
+        }
+        outbound_model = _create_model(final_config)
+        inbound_model = _create_model(final_config)
 
-        avg_mae = float(np.mean(cv_maes))
-        avg_mape = float(np.mean(cv_mapes))
+        outbound_model.fit(X, y_out_log)
+        inbound_model.fit(X, y_in_log)
+        logger.info("Full retrain complete")
 
-        # ── 5. Retrain on full data ──────────────────────────────────
-        outbound_model.fit(X, y_outbound)
-        inbound_model.fit(X, y_inbound)
+        # ── 6. Feature importance ────────────────────────────────────
+        if hasattr(outbound_model, "feature_importances_"):
+            importances = outbound_model.feature_importances_
+            top_idx = np.argsort(importances)[::-1][:10]
+            top_features = [
+                (ALL_FEATURES[i], round(float(importances[i]), 4))
+                for i in top_idx
+            ]
+            logger.info(f"Top-10 features: {top_features}")
+        else:
+            top_features = []
 
-        # ── 6. Persist model ─────────────────────────────────────────
+        # ── 7. Persist model ─────────────────────────────────────────
         model_path = _get_model_path(product_id, business_id)
         artifact = {
             "model": outbound_model,
             "inbound_model": inbound_model,
             "features": ALL_FEATURES,
+            "log_target": True,
             "data_start": combined["date"].min().date(),
             "data_end": combined["date"].max().date(),
             "n_days": n_days,
         }
         joblib.dump(artifact, model_path)
 
-        # ── 7. Save metadata to DB ───────────────────────────────────
+        # ── 8. Save metadata to DB ───────────────────────────────────
         meta = save_model_metadata(
             product_id=product_id,
             business_id=business_id,
@@ -209,12 +515,24 @@ def train_model(product_id: int, business_id: int) -> dict:
             "product_id": product_id,
             "business_id": business_id,
             "data_points": n_days,
+            "training_samples": n_samples,
             "data_start": str(combined["date"].min().date()),
             "data_end": str(combined["date"].max().date()),
             "model_type": type(outbound_model).__name__,
+            "best_config": best_config["name"],
             "cv_mae": round(avg_mae, 2),
             "cv_mape": round(avg_mape, 2),
+            "baseline_mae": round(baseline_mae, 2),
+            "improvement_vs_baseline": round(
+                (1 - avg_mae / baseline_mae) * 100, 1
+            ) if baseline_mae > 0 else 0.0,
             "cv_splits": n_splits,
+            "configs_evaluated": len(candidates),
+            "top_features": top_features[:5] if top_features else [],
+            "all_config_results": [
+                {"name": r["name"], "mae": round(r["avg_mae"], 3)}
+                for r in all_results
+            ],
             "features_used": ALL_FEATURES,
             "message": "Model trained successfully",
         }
