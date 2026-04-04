@@ -94,35 +94,57 @@ def predict_demand(
     today = date.today()
     future_dates = [today + timedelta(days=i + 1) for i in range(days_ahead)]
 
-    # ── Batch prediction (stable — no feedback loop) ─────────────
-    # Predict all future days at once using actual history for lag
-    # features.  Avoids the iterative death-spiral where small
-    # under-predictions compound via lag features until demand → 0.
-    X_all = build_prediction_features(
-        future_dates,
-        last_known_outbound=last_outbound or None,
-        last_known_inbound=last_inbound or None,
+    # ── Iterative prediction with dampened feedback ───────────────
+    # Each day's prediction feeds into the next day's lag/rolling
+    # features so they vary across the horizon (matching training).
+    # Exponential dampening blends predictions toward the historical
+    # mean to prevent the "death spiral" where small errors compound.
+    out_buffer = list(last_outbound)   # mutable history copy
+    in_buffer = list(last_inbound)
+
+    hist_mean_out = (
+        float(np.mean(out_buffer[-30:])) if out_buffer else 0.0
+    )
+    hist_mean_in = (
+        float(np.mean(in_buffer[-30:])) if in_buffer else 0.0
     )
 
-    raw_outbound = outbound_model.predict(X_all)
-    if log_target:
-        preds_outbound = [
-            max(round(float(np.expm1(r)), 1), 0) for r in raw_outbound
-        ]
-    else:
-        preds_outbound = [max(round(float(r), 1), 0) for r in raw_outbound]
+    preds_outbound: list[float] = []
+    preds_inbound: list[float] = []
 
-    if inbound_model is not None:
-        raw_inbound = inbound_model.predict(X_all)
+    for i, d in enumerate(future_dates):
+        X_day = build_prediction_features(
+            target_date=d,
+            outbound_history=out_buffer,
+            inbound_history=in_buffer,
+        )
+
+        # ── Outbound prediction ──────────────────────────────────
+        raw_out = outbound_model.predict(X_day)[0]
         if log_target:
-            preds_inbound = [
-                max(round(float(np.expm1(r)), 1), 0) for r in raw_inbound
-            ]
+            pred_out = max(round(float(np.expm1(raw_out)), 1), 0)
         else:
-            preds_inbound = [max(round(float(r), 1), 0) for r in raw_inbound]
-    else:
-        avg_in = float(np.mean(last_inbound)) if last_inbound else 0.0
-        preds_inbound = [round(avg_in, 1)] * days_ahead
+            pred_out = max(round(float(raw_out), 1), 0)
+        preds_outbound.append(pred_out)
+
+        # ── Inbound prediction ───────────────────────────────────
+        if inbound_model is not None:
+            raw_in = inbound_model.predict(X_day)[0]
+            if log_target:
+                pred_in = max(round(float(np.expm1(raw_in)), 1), 0)
+            else:
+                pred_in = max(round(float(raw_in), 1), 0)
+        else:
+            pred_in = round(hist_mean_in, 1)
+        preds_inbound.append(pred_in)
+
+        # ── Dampened feedback into history buffer ────────────────
+        # Blend prediction with historical mean; dampening increases
+        # linearly from 0 % (day 0 → pure prediction) to 50 % (last
+        # day → half prediction, half mean) to prevent drift.
+        dampen = max(0.5, 1.0 - 0.5 * (i / max(days_ahead - 1, 1)))
+        out_buffer.append(dampen * pred_out + (1 - dampen) * hist_mean_out)
+        in_buffer.append(dampen * pred_in + (1 - dampen) * hist_mean_in)
 
     # ── Build projected stock curve ──────────────────────────────
     # Stock projection only subtracts predicted outbound (demand).

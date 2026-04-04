@@ -13,7 +13,7 @@ Builds a full feature matrix from a daily time-series DataFrame by combining:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -314,25 +314,41 @@ def build_feature_matrix(daily_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Serie
 
 
 def build_prediction_features(
-    future_dates: list[date],
-    last_known_outbound: list[float] | None = None,
-    last_known_inbound: list[float] | None = None,
+    target_date: date,
+    outbound_history: list[float],
+    inbound_history: list[float],
 ) -> pd.DataFrame:
     """
-    Build a feature matrix for future dates (where actual outbound/inbound
-    are unknown).  Lag / rolling features are seeded from last-known actuals.
+    Build a single-row feature matrix for one future date.
+
+    Uses the same feature computation logic as training:
+      - Lag features reference the history buffer (which may include prior
+        predictions appended iteratively)
+      - Rolling features computed over the history buffer
+      - Weekday features match training's same-day-of-week lookback logic
+      - days_since_start continues from history length (proxy for training length)
+
+    Parameters
+    ----------
+    target_date : date
+        The future date to predict for.
+    outbound_history : list[float]
+        Full outbound history up to (not including) target_date.
+        May include prior predictions appended iteratively.
+    inbound_history : list[float]
+        Full inbound history up to (not including) target_date.
     """
-    df = pd.DataFrame({"date": future_dates})
+    df = pd.DataFrame({"date": [target_date]})
     df = _add_temporal_features(df)
     df = _add_cyclical_features(df)
     df = _add_holiday_features(df)
 
-    out = list(last_known_outbound) if last_known_outbound else []
-    inp = list(last_known_inbound) if last_known_inbound else []
+    out = list(outbound_history) if outbound_history else []
+    inp = list(inbound_history) if inbound_history else []
 
     # ── Helpers ──────────────────────────────────────────────────
     def _tail(arr: list, n: int) -> list:
-        return arr[-n:] if len(arr) >= n else arr
+        return arr[-n:] if len(arr) >= n else arr[:]
 
     def _mean(arr: list, n: int) -> float:
         s = _tail(arr, n)
@@ -349,7 +365,7 @@ def build_prediction_features(
     def _safe(arr: list, idx: int) -> float:
         return float(arr[-idx]) if len(arr) >= idx else 0.0
 
-    # ── Shifted lag features ─────────────────────────────────────
+    # ── Shifted lag features (match training's shift logic) ──────
     df["outbound_lag_1"] = _safe(out, 1)
     df["outbound_lag_2"] = _safe(out, 2)
     df["outbound_lag_3"] = _safe(out, 3)
@@ -358,33 +374,28 @@ def build_prediction_features(
     df["inbound_lag_1"] = _safe(inp, 1)
     df["inbound_lag_7"] = _safe(inp, 7)
 
-    # ── Weekday features ─────────────────────────────────────────
-    dow_series = pd.to_datetime(df["date"]).dt.dayofweek
-    weekday_vals: list[float] = []
-    weekday_meds: list[float] = []
-    for _, row_date in enumerate(future_dates):
-        target_dow = row_date.weekday()
-        same_dow = [out[j] for j in range(len(out))
-                    if j >= len(out) - 28
-                    and (len(out) - j) % 7 == 0
-                    or (len(out) > j and
-                        pd.Timestamp(row_date).dayofweek == target_dow)]
-        # Simpler: just pick values at offsets -7, -14, -21, -28
-        same_dow_simple = []
-        for offset in [7, 14, 21, 28]:
-            if len(out) >= offset:
-                same_dow_simple.append(out[-offset])
-        if same_dow_simple:
-            weekday_vals.append(float(np.mean(same_dow_simple)))
-            weekday_meds.append(float(np.median(same_dow_simple)))
-        else:
-            avg = _mean(out, 7)
-            weekday_vals.append(avg)
-            weekday_meds.append(avg)
-    df["outbound_same_dow_4w_avg"] = weekday_vals[:len(df)]
-    df["outbound_same_dow_4w_median"] = weekday_meds[:len(df)]
+    # ── Weekday features (same logic as training) ────────────────
+    # Look back up to 28 days in history for same-day-of-week values,
+    # matching _add_weekday_features() used during training.
+    target_dow = target_date.weekday()
+    same_dow_vals = []
+    history_len = len(out)
+    lookback = min(28, history_len)
+    for j in range(history_len - lookback, history_len):
+        days_back = history_len - j
+        past_date = target_date - timedelta(days=days_back)
+        if past_date.weekday() == target_dow:
+            same_dow_vals.append(out[j])
 
-    # ── Rolling features ─────────────────────────────────────────
+    if same_dow_vals:
+        df["outbound_same_dow_4w_avg"] = float(np.mean(same_dow_vals))
+        df["outbound_same_dow_4w_median"] = float(np.median(same_dow_vals))
+    else:
+        recent_avg = _mean(out, 7)
+        df["outbound_same_dow_4w_avg"] = recent_avg
+        df["outbound_same_dow_4w_median"] = recent_avg
+
+    # ── Rolling features (match training's rolling window logic) ─
     df["outbound_3d_avg"] = _mean(out, 3)
     df["outbound_7d_avg"] = _mean(out, 7)
     df["outbound_14d_avg"] = _mean(out, 14)
@@ -415,7 +426,9 @@ def build_prediction_features(
     # ── Trend features ───────────────────────────────────────────
     df["outbound_trend_7d"] = _compute_slope(out[-7:]) if len(out) >= 7 else 0.0
     df["outbound_trend_14d"] = _compute_slope(out[-14:]) if len(out) >= 14 else 0.0
-    df["days_since_start"] = 0  # not meaningful for future predictions
+    # Continue from the end of training data so the model sees a
+    # realistic position on the time axis, not "day 0".
+    df["days_since_start"] = len(out)
 
     return df[ALL_FEATURES].astype(float)
 
