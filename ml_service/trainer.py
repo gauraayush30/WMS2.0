@@ -309,6 +309,52 @@ def _create_model(config: dict):
         return RandomForestRegressor(**config["params"])
 
 
+def _compute_inbound_stats(daily_df: pd.DataFrame) -> dict:
+    """
+    Extract historical restocking behaviour from the training data.
+
+    Returns a dict with:
+        avg_batch_size          – mean inbound qty on restock days
+        median_batch_size       – median inbound qty on restock days
+        avg_restock_freq_days   – mean gap (days) between consecutive restocks
+        avg_daily_outbound      – mean daily outbound across all days
+        reorder_point_units     – stock level below which a restock is triggered
+                                  (approximated as avg_daily_outbound × avg_freq)
+    """
+    restock_days = daily_df[daily_df["inbound_qty"] > 0].copy()
+
+    avg_daily_outbound = float(daily_df["outbound_qty"].mean())
+
+    if restock_days.empty:
+        # No restocking history – use sensible defaults
+        return {
+            "avg_batch_size": round(avg_daily_outbound * 5, 0),
+            "median_batch_size": round(avg_daily_outbound * 5, 0),
+            "avg_restock_freq_days": 5.0,
+            "avg_daily_outbound": round(avg_daily_outbound, 2),
+            "reorder_point_units": round(avg_daily_outbound * 5, 0),
+        }
+
+    avg_batch = float(restock_days["inbound_qty"].mean())
+    median_batch = float(restock_days["inbound_qty"].median())
+
+    # Compute gaps between consecutive restock days
+    restock_dates = pd.to_datetime(restock_days["date"]).sort_values()
+    gaps = restock_dates.diff().dt.days.dropna()
+    avg_freq = float(gaps.mean()) if len(gaps) > 0 else 5.0
+
+    # Reorder point: roughly 1 restock-cycle worth of demand
+    reorder_point = avg_daily_outbound * avg_freq
+
+    return {
+        "avg_batch_size": round(avg_batch, 0),
+        "median_batch_size": round(median_batch, 0),
+        "avg_restock_freq_days": round(avg_freq, 1),
+        "avg_daily_outbound": round(avg_daily_outbound, 2),
+        "reorder_point_units": round(reorder_point, 0),
+    }
+
+
 def train_model(product_id: int, business_id: int) -> dict:
     """
     Train (or re-train) a demand prediction model for a single product.
@@ -484,7 +530,20 @@ def train_model(product_id: int, business_id: int) -> dict:
         else:
             top_features = []
 
-        # ── 7. Persist model ─────────────────────────────────────────
+        # ── 7. Compute inbound restocking statistics ────────────────
+        # Inbound (restocking) is a business decision driven by stock
+        # levels, not a temporal demand pattern.  Instead of using the
+        # ML inbound model (which predicts ~0 due to zero-inflated
+        # targets), we extract historical restocking behaviour and
+        # replay it as a reorder-point heuristic during prediction.
+        inbound_stats = _compute_inbound_stats(combined)
+        logger.info(
+            f"Inbound stats: avg_batch={inbound_stats['avg_batch_size']:.0f}, "
+            f"avg_freq={inbound_stats['avg_restock_freq_days']:.1f}d, "
+            f"reorder_point={inbound_stats['reorder_point_units']:.0f}"
+        )
+
+        # ── 8. Persist model ─────────────────────────────────────────
         model_path = _get_model_path(product_id, business_id)
         artifact = {
             "model": outbound_model,
@@ -494,10 +553,11 @@ def train_model(product_id: int, business_id: int) -> dict:
             "data_start": combined["date"].min().date(),
             "data_end": combined["date"].max().date(),
             "n_days": n_days,
+            "inbound_stats": inbound_stats,
         }
         joblib.dump(artifact, model_path)
 
-        # ── 8. Save metadata to DB ───────────────────────────────────
+        # ── 9. Save metadata to DB ───────────────────────────────────
         meta = save_model_metadata(
             product_id=product_id,
             business_id=business_id,

@@ -63,8 +63,8 @@ def predict_demand(
         )
 
     outbound_model = artifact["model"]
-    inbound_model = artifact.get("inbound_model")
     log_target = artifact.get("log_target", False)
+    inbound_stats = artifact.get("inbound_stats")
     meta = get_model_metadata(product_id, business_id)
 
     # ── Gather recent actuals for lag features ───────────────────
@@ -94,23 +94,15 @@ def predict_demand(
     today = date.today()
     future_dates = [today + timedelta(days=i + 1) for i in range(days_ahead)]
 
-    # ── Iterative prediction with dampened feedback ───────────────
-    # Each day's prediction feeds into the next day's lag/rolling
-    # features so they vary across the horizon (matching training).
-    # Exponential dampening blends predictions toward the historical
-    # mean to prevent the "death spiral" where small errors compound.
-    out_buffer = list(last_outbound)   # mutable history copy
+    # ── Iterative outbound prediction with dampened feedback ──────
+    out_buffer = list(last_outbound)
     in_buffer = list(last_inbound)
 
     hist_mean_out = (
         float(np.mean(out_buffer[-30:])) if out_buffer else 0.0
     )
-    hist_mean_in = (
-        float(np.mean(in_buffer[-30:])) if in_buffer else 0.0
-    )
 
     preds_outbound: list[float] = []
-    preds_inbound: list[float] = []
 
     for i, d in enumerate(future_dates):
         X_day = build_prediction_features(
@@ -119,7 +111,7 @@ def predict_demand(
             inbound_history=in_buffer,
         )
 
-        # ── Outbound prediction ──────────────────────────────────
+        # ── Outbound prediction (ML model) ───────────────────────
         raw_out = outbound_model.predict(X_day)[0]
         if log_target:
             pred_out = max(round(float(np.expm1(raw_out)), 1), 0)
@@ -127,31 +119,69 @@ def predict_demand(
             pred_out = max(round(float(raw_out), 1), 0)
         preds_outbound.append(pred_out)
 
-        # ── Inbound prediction ───────────────────────────────────
-        if inbound_model is not None:
-            raw_in = inbound_model.predict(X_day)[0]
-            if log_target:
-                pred_in = max(round(float(np.expm1(raw_in)), 1), 0)
-            else:
-                pred_in = max(round(float(raw_in), 1), 0)
-        else:
-            pred_in = round(hist_mean_in, 1)
-        preds_inbound.append(pred_in)
-
-        # ── Dampened feedback into history buffer ────────────────
-        # Blend prediction with historical mean; dampening increases
-        # linearly from 0 % (day 0 → pure prediction) to 50 % (last
-        # day → half prediction, half mean) to prevent drift.
+        # Dampened feedback into history buffer
         dampen = max(0.5, 1.0 - 0.5 * (i / max(days_ahead - 1, 1)))
         out_buffer.append(dampen * pred_out + (1 - dampen) * hist_mean_out)
-        in_buffer.append(dampen * pred_in + (1 - dampen) * hist_mean_in)
+        in_buffer.append(0.0)  # placeholder; inbound computed below
 
-    # ── Build projected stock curve ──────────────────────────────
-    # Stock projection only subtracts predicted outbound (demand).
-    # Inbound (restocking) is a business decision, not demand — including
-    # it would always show "you'll never run out" which defeats the purpose.
+    # ── Inbound prediction via reorder-point heuristic ───────────
+    # Restocking is a business decision driven by stock levels, not
+    # a temporal demand pattern.  We replay historical restocking
+    # behaviour: when projected stock drops below the reorder point
+    # derived from training data, we insert a predicted restock.
     current_stock = get_current_stock(product_id, business_id)
+
+    if inbound_stats:
+        avg_batch = float(inbound_stats["avg_batch_size"])
+        median_batch = float(inbound_stats.get("median_batch_size", avg_batch))
+        avg_freq = float(inbound_stats["avg_restock_freq_days"])
+        reorder_point = float(inbound_stats["reorder_point_units"])
+        avg_daily_out = float(inbound_stats["avg_daily_outbound"])
+    else:
+        # Fallback: derive from recent history
+        avg_daily_out = hist_mean_out if hist_mean_out > 0 else 50.0
+        avg_freq = 4.0
+        avg_batch = avg_daily_out * avg_freq * 1.5
+        median_batch = avg_batch
+        reorder_point = avg_daily_out * avg_freq
+
+    preds_inbound: list[float] = []
     projected = float(current_stock)
+    days_since_restock = 0
+
+    for i, pred_out in enumerate(preds_outbound):
+        projected -= float(pred_out)
+        days_since_restock += 1
+
+        # Trigger a restock when stock drops below the reorder point
+        # OR when enough days have passed since last restock (regular
+        # delivery schedule), whichever comes first.
+        # Skip Sundays (weekday 6) to match the generator pattern.
+        d = future_dates[i]
+        need_restock = (
+            projected < reorder_point
+            or days_since_restock >= avg_freq + 1
+        )
+        is_sunday = d.weekday() == 6
+
+        if need_restock and not is_sunday and projected < avg_batch * 2:
+            # Order enough to bring stock up to ~2× reorder point
+            shortfall = max(0, (reorder_point * 2.5) - projected)
+            batch = max(avg_batch * 0.85, min(shortfall, avg_batch * 1.15))
+            pred_in = round(batch, 0)
+            projected += pred_in
+            days_since_restock = 0
+        else:
+            pred_in = 0.0
+
+        preds_inbound.append(pred_in)
+
+    # ── Build projected stock curves ─────────────────────────────
+    # Two projections:
+    #   1. With restocking (realistic view)
+    #   2. Without restocking (for stockout risk assessment)
+    projected_with_restock = float(current_stock)
+    projected_no_restock = float(current_stock)
 
     predictions = []
     stock_out_date = None
@@ -160,18 +190,23 @@ def predict_demand(
     for i, (d, pred_out, pred_in) in enumerate(
         zip(future_dates, preds_outbound, preds_inbound)
     ):
-        projected = max(projected - float(pred_out), 0)
+        projected_with_restock = max(
+            projected_with_restock - float(pred_out) + float(pred_in), 0
+        )
+        projected_no_restock = max(projected_no_restock - float(pred_out), 0)
         holiday_name = get_all_holiday_name(d)
 
         predictions.append({
             "date": str(d),
             "predicted_outbound": float(pred_out),
             "predicted_inbound": float(pred_in),
-            "projected_stock": round(projected, 1),
+            "projected_stock": round(projected_with_restock, 1),
+            "projected_stock_no_restock": round(projected_no_restock, 1),
             "holiday_name": holiday_name,
         })
 
-        if stock_out_date is None and projected <= 0:
+        # Stockout date based on no-restock projection (risk indicator)
+        if stock_out_date is None and projected_no_restock <= 0:
             stock_out_date = str(d)
             days_until_stockout = i + 1
 
