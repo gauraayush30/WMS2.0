@@ -1,24 +1,17 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth, API } from "../../context/AuthContext";
 import {
   TrendingUp,
   TrendingDown,
-  Minus,
   Ban,
   ArrowUpDown,
   Download,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select } from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -111,19 +104,31 @@ export default function FastSlowMovingPage() {
   const [days, setDays] = useState("30");
   const [filterCategory, setFilterCategory] = useState("all");
   const [search, setSearch] = useState("");
+  const mountedRef = useRef(true);
 
   const fetchReport = useCallback(() => {
     setLoading(true);
     authFetch(`${API}/reports/fast-slow-moving?days=${days}`)
       .then((r) => r.json())
-      .then((d) => setData(d))
+      .then((d) => {
+        if (mountedRef.current) setData(d);
+      })
       .catch(console.error)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (mountedRef.current) setLoading(false);
+      });
   }, [authFetch, days]);
 
+  // eslint-disable-next-line
   useEffect(() => {
     fetchReport();
   }, [fetchReport]);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   const filteredItems = (data?.items ?? []).filter((item) => {
     if (filterCategory !== "all" && item.category !== filterCategory)
@@ -221,19 +226,18 @@ export default function FastSlowMovingPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={days} onValueChange={(v) => setDays(v)}>
-            <SelectTrigger className="w-[140px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="7">Last 7 days</SelectItem>
-              <SelectItem value="14">Last 14 days</SelectItem>
-              <SelectItem value="30">Last 30 days</SelectItem>
-              <SelectItem value="60">Last 60 days</SelectItem>
-              <SelectItem value="90">Last 90 days</SelectItem>
-              <SelectItem value="180">Last 180 days</SelectItem>
-              <SelectItem value="365">Last 365 days</SelectItem>
-            </SelectContent>
+          <Select
+            value={days}
+            onChange={(e) => setDays(e.target.value)}
+            className="w-35"
+          >
+            <option value="7">Last 7 days</option>
+            <option value="14">Last 14 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="60">Last 60 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="180">Last 180 days</option>
+            <option value="365">Last 365 days</option>
           </Select>
           <Button variant="outline" size="sm" onClick={exportCSV}>
             <Download size={16} className="mr-1.5" />
