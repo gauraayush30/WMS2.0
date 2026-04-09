@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useAuth, API } from "../../context/AuthContext";
 import {
   TrendingUp,
@@ -104,31 +104,20 @@ export default function FastSlowMovingPage() {
   const [days, setDays] = useState("30");
   const [filterCategory, setFilterCategory] = useState("all");
   const [search, setSearch] = useState("");
-  const mountedRef = useRef(true);
 
   const fetchReport = useCallback(() => {
     setLoading(true);
     authFetch(`${API}/reports/fast-slow-moving?days=${days}`)
       .then((r) => r.json())
-      .then((d) => {
-        if (mountedRef.current) setData(d);
-      })
+      .then((d) => setData(d))
       .catch(console.error)
-      .finally(() => {
-        if (mountedRef.current) setLoading(false);
-      });
+      .finally(() => setLoading(false));
   }, [authFetch, days]);
 
   // eslint-disable-next-line
   useEffect(() => {
     fetchReport();
   }, [fetchReport]);
-  useEffect(
-    () => () => {
-      mountedRef.current = false;
-    },
-    [],
-  );
 
   const filteredItems = (data?.items ?? []).filter((item) => {
     if (filterCategory !== "all" && item.category !== filterCategory)

@@ -73,7 +73,7 @@ def fast_slow_moving_report(
             FROM products p
             LEFT JOIN movement    mv ON mv.product_id = p.id
             LEFT JOIN ml_movement ml ON ml.product_id = p.id
-            WHERE p.business_id = :biz AND p.is_active = true
+            WHERE p.business_id = :biz
         ),
         thresholds AS (
             SELECT
