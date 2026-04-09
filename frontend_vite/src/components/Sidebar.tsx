@@ -7,6 +7,7 @@ import {
   Users,
   ChevronLeft,
   ChevronRight,
+  FileBarChart,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -18,6 +19,7 @@ const navItems = [
   { to: "/products", icon: Package, label: "Products" },
   { to: "/inventory", icon: ArrowLeftRight, label: "Inventory" },
   { to: "/business", icon: Building2, label: "Business" },
+  { to: "/reports", icon: FileBarChart, label: "Reports" },
   { to: "/users", icon: Users, label: "Users" },
 ];
 

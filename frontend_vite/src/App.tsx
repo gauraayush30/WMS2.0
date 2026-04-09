@@ -15,6 +15,8 @@ import BusinessDetailsPage from "./pages/business/BusinessDetailsPage";
 import InvitesPage from "./pages/business/InvitesPage";
 import DeliveryLocationsPage from "./pages/business/DeliveryLocationsPage";
 import UsersPage from "./pages/UsersPage";
+import ReportsPage from "./pages/ReportsPage";
+import FastSlowMovingPage from "./pages/reports/FastSlowMovingPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -56,6 +58,11 @@ function AppInner() {
             element={<DeliveryLocationsPage />}
           />
           <Route path="/users" element={<UsersPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
+          <Route
+            path="/reports/fast-slow-moving"
+            element={<FastSlowMovingPage />}
+          />
         </Route>
       </Routes>
     </BrowserRouter>

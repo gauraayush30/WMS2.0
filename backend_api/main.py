@@ -18,6 +18,7 @@ from routes.delivery_locations import router as delivery_locations_router
 from routes.dashboard import router as dashboard_router
 from routes.legacy import router as legacy_router
 from routes.ml_proxy import router as ml_proxy_router
+from routes.reports import router as reports_router
 
 
 @asynccontextmanager
@@ -51,3 +52,4 @@ app.include_router(delivery_locations_router)
 app.include_router(dashboard_router)
 app.include_router(legacy_router)
 app.include_router(ml_proxy_router)
+app.include_router(reports_router)
