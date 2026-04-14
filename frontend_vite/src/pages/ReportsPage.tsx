@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { TrendingUp } from "lucide-react";
+import { TrendingUp, ArrowUpDown } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { motion } from "framer-motion";
 
@@ -11,6 +11,14 @@ const reports = [
     description:
       "Classify products by outbound movement speed over a configurable period.",
     color: "bg-emerald-50 text-emerald-600",
+  },
+  {
+    to: "/reports/inbound-outbound",
+    icon: ArrowUpDown,
+    label: "Inbound vs Outbound",
+    description:
+      "View top inbound & outbound products and track movement trends over time.",
+    color: "bg-blue-50 text-blue-600",
   },
 ];
 

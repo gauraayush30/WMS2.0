@@ -121,3 +121,125 @@ def fast_slow_moving_report(
         },
         "items": items,
     }
+
+
+@router.get("/inbound-outbound")
+def inbound_outbound_report(
+    days: int = Query(30, ge=7, le=365, description="Look-back period in days"),
+    product_id: int | None = Query(None, description="Optional product ID to get daily time-series for"),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    Inbound vs Outbound report:
+      - Top 5 products by total inbound
+      - Top 5 products by total outbound
+      - Product list (for search dropdown)
+      - Daily inbound/outbound time-series (all products or a specific one)
+    """
+    biz_id = _get_user_business_id(user_id)
+
+    # ── Top 5 rankings ──────────────────────────────────────────
+    ranking_query = text("""
+        WITH movement AS (
+            SELECT
+                t.product_id,
+                SUM(CASE WHEN t.stock_adjusted > 0
+                         THEN t.stock_adjusted ELSE 0 END)::int AS total_inbound,
+                SUM(CASE WHEN t.stock_adjusted < 0
+                         THEN ABS(t.stock_adjusted) ELSE 0 END)::int AS total_outbound
+            FROM inventory_transactions t
+            WHERE t.business_id = :biz
+              AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+            GROUP BY t.product_id
+        )
+        SELECT
+            p.id   AS product_id,
+            p.name AS product_name,
+            p.sku_code,
+            COALESCE(m.total_inbound, 0)  AS total_inbound,
+            COALESCE(m.total_outbound, 0) AS total_outbound,
+            p.stock_at_warehouse AS current_stock
+        FROM products p
+        LEFT JOIN movement m ON m.product_id = p.id
+        WHERE p.business_id = :biz
+        ORDER BY COALESCE(m.total_outbound, 0) + COALESCE(m.total_inbound, 0) DESC
+    """)
+
+    with engine.connect() as conn:
+        rows = conn.execute(ranking_query, {"biz": biz_id, "days": days}).mappings().all()
+
+    all_products = [dict(r) for r in rows]
+
+    # Top 5 by inbound
+    top_inbound = sorted(all_products, key=lambda x: x["total_inbound"], reverse=True)[:5]
+    # Top 5 by outbound
+    top_outbound = sorted(all_products, key=lambda x: x["total_outbound"], reverse=True)[:5]
+
+    # Product list for dropdown (only products with any movement)
+    product_list = [
+        {"id": p["product_id"], "name": p["product_name"], "sku_code": p["sku_code"]}
+        for p in all_products
+    ]
+
+    # ── Daily time-series ────────────────────────────────────────
+    if product_id:
+        timeline_query = text("""
+            SELECT
+                DATE(t.transaction_at) AS date,
+                SUM(CASE WHEN t.stock_adjusted > 0
+                         THEN t.stock_adjusted ELSE 0 END)::int AS inbound,
+                SUM(CASE WHEN t.stock_adjusted < 0
+                         THEN ABS(t.stock_adjusted) ELSE 0 END)::int AS outbound
+            FROM inventory_transactions t
+            WHERE t.business_id = :biz
+              AND t.product_id = :pid
+              AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+            GROUP BY DATE(t.transaction_at)
+            ORDER BY date
+        """)
+        with engine.connect() as conn:
+            tl_rows = conn.execute(
+                timeline_query, {"biz": biz_id, "pid": product_id, "days": days}
+            ).mappings().all()
+    else:
+        timeline_query = text("""
+            SELECT
+                DATE(t.transaction_at) AS date,
+                SUM(CASE WHEN t.stock_adjusted > 0
+                         THEN t.stock_adjusted ELSE 0 END)::int AS inbound,
+                SUM(CASE WHEN t.stock_adjusted < 0
+                         THEN ABS(t.stock_adjusted) ELSE 0 END)::int AS outbound
+            FROM inventory_transactions t
+            WHERE t.business_id = :biz
+              AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+            GROUP BY DATE(t.transaction_at)
+            ORDER BY date
+        """)
+        with engine.connect() as conn:
+            tl_rows = conn.execute(
+                timeline_query, {"biz": biz_id, "days": days}
+            ).mappings().all()
+
+    timeline = [dict(r) for r in tl_rows]
+    # Convert date objects to strings for JSON serialization
+    for row in timeline:
+        row["date"] = str(row["date"])
+
+    # Summary totals
+    total_inbound = sum(p["total_inbound"] for p in all_products)
+    total_outbound = sum(p["total_outbound"] for p in all_products)
+
+    return {
+        "days": days,
+        "summary": {
+            "total_inbound": total_inbound,
+            "total_outbound": total_outbound,
+            "total_products": len(all_products),
+            "net_flow": total_inbound - total_outbound,
+        },
+        "top_inbound": top_inbound,
+        "top_outbound": top_outbound,
+        "product_list": product_list,
+        "timeline": timeline,
+        "selected_product_id": product_id,
+    }

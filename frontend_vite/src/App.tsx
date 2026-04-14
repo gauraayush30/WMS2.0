@@ -17,6 +17,7 @@ import DeliveryLocationsPage from "./pages/business/DeliveryLocationsPage";
 import UsersPage from "./pages/UsersPage";
 import ReportsPage from "./pages/ReportsPage";
 import FastSlowMovingPage from "./pages/reports/FastSlowMovingPage";
+import InboundOutboundPage from "./pages/reports/InboundOutboundPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -62,6 +63,10 @@ function AppInner() {
           <Route
             path="/reports/fast-slow-moving"
             element={<FastSlowMovingPage />}
+          />
+          <Route
+            path="/reports/inbound-outbound"
+            element={<InboundOutboundPage />}
           />
         </Route>
       </Routes>
