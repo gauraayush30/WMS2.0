@@ -22,6 +22,7 @@ interface Product {
   safety_stock: number;
   lead_time_days: number;
   max_stock_level: number;
+  expiry_days: number;
   location_zone: string;
   location_aisle: string;
   location_rack: string;
@@ -46,6 +47,7 @@ export default function EditProduct() {
     safety_stock: "0",
     lead_time_days: "0",
     max_stock_level: "0",
+    expiry_days: "0",
     location_zone: "",
     location_aisle: "",
     location_rack: "",
@@ -74,6 +76,7 @@ export default function EditProduct() {
           safety_stock: String(p.safety_stock ?? 0),
           lead_time_days: String(p.lead_time_days ?? 0),
           max_stock_level: String(p.max_stock_level ?? 0),
+          expiry_days: String(p.expiry_days ?? 0),
           location_zone: p.location_zone ?? "",
           location_aisle: p.location_aisle ?? "",
           location_rack: p.location_rack ?? "",
@@ -108,6 +111,7 @@ export default function EditProduct() {
           safety_stock: parseInt(form.safety_stock) || 0,
           lead_time_days: parseInt(form.lead_time_days) || 0,
           max_stock_level: parseInt(form.max_stock_level) || 0,
+          expiry_days: parseInt(form.expiry_days) || 0,
           location_zone: form.location_zone.trim(),
           location_aisle: form.location_aisle.trim(),
           location_rack: form.location_rack.trim(),
@@ -186,6 +190,11 @@ export default function EditProduct() {
                 <div className="space-y-1.5"><Label>Safety Stock</Label><Input type="number" min="0" value={form.safety_stock} onChange={(e) => set("safety_stock", e.target.value)} /></div>
                 <div className="space-y-1.5"><Label>Lead Time (days)</Label><Input type="number" min="0" value={form.lead_time_days} onChange={(e) => set("lead_time_days", e.target.value)} /></div>
                 <div className="space-y-1.5"><Label>Max Stock Level</Label><Input type="number" min="0" value={form.max_stock_level} onChange={(e) => set("max_stock_level", e.target.value)} /></div>
+                <div className="space-y-1.5">
+                  <Label>Expiry Days</Label>
+                  <Input type="number" min="0" placeholder="0 = no expiry" value={form.expiry_days} onChange={(e) => set("expiry_days", e.target.value)} />
+                  <p className="text-[10px] text-muted-foreground">Stock expires after this many days from purchase. 0 = no expiry.</p>
+                </div>
               </div>
             </div>
 

@@ -607,6 +607,7 @@ def update_business(business_id: int, name: str, location: str | None) -> dict |
 PRODUCT_COLUMNS = (
     "id, name, sku_code, business_id, price, stock_at_warehouse, uom, "
     "par_level, reorder_point, safety_stock, lead_time_days, max_stock_level, "
+    "expiry_days, "
     "location_zone, location_aisle, location_rack, location_shelf, location_level, location_bin, "
     "created_at, updated_at"
 )
@@ -614,14 +615,17 @@ PRODUCT_COLUMNS = (
 
 def create_product(name: str, sku_code: str, business_id: int, price: float = 0, stock_at_warehouse: int = 0, uom: str = "pcs",
                    par_level: int = 0, reorder_point: int = 0, safety_stock: int = 0, lead_time_days: int = 0, max_stock_level: int = 0,
+                   expiry_days: int = 0,
                    location_zone: str = "", location_aisle: str = "", location_rack: str = "",
                    location_shelf: str = "", location_level: str = "", location_bin: str = "") -> dict:
     query = text(f"""
         INSERT INTO products (name, sku_code, business_id, price, stock_at_warehouse, uom,
                               par_level, reorder_point, safety_stock, lead_time_days, max_stock_level,
+                              expiry_days,
                               location_zone, location_aisle, location_rack, location_shelf, location_level, location_bin)
         VALUES (:name, :sku_code, :business_id, :price, :stock, :uom,
                 :par_level, :reorder_point, :safety_stock, :lead_time_days, :max_stock_level,
+                :expiry_days,
                 :location_zone, :location_aisle, :location_rack, :location_shelf, :location_level, :location_bin)
         RETURNING {PRODUCT_COLUMNS}
     """)
@@ -631,7 +635,7 @@ def create_product(name: str, sku_code: str, business_id: int, price: float = 0,
             "price": price, "stock": stock_at_warehouse, "uom": uom,
             "par_level": par_level, "reorder_point": reorder_point,
             "safety_stock": safety_stock, "lead_time_days": lead_time_days,
-            "max_stock_level": max_stock_level,
+            "max_stock_level": max_stock_level, "expiry_days": expiry_days,
             "location_zone": location_zone, "location_aisle": location_aisle,
             "location_rack": location_rack, "location_shelf": location_shelf,
             "location_level": location_level, "location_bin": location_bin,
@@ -684,6 +688,7 @@ def get_product_by_id(product_id: int, business_id: int) -> dict | None:
 
 def update_product(product_id: int, business_id: int, name: str, sku_code: str, price: float, uom: str = "pcs",
                    par_level: int = 0, reorder_point: int = 0, safety_stock: int = 0, lead_time_days: int = 0, max_stock_level: int = 0,
+                   expiry_days: int = 0,
                    location_zone: str = "", location_aisle: str = "", location_rack: str = "",
                    location_shelf: str = "", location_level: str = "", location_bin: str = "") -> dict | None:
     query = text(f"""
@@ -691,7 +696,7 @@ def update_product(product_id: int, business_id: int, name: str, sku_code: str, 
         SET name = :name, sku_code = :sku_code, price = :price, uom = :uom,
             par_level = :par_level, reorder_point = :reorder_point,
             safety_stock = :safety_stock, lead_time_days = :lead_time_days,
-            max_stock_level = :max_stock_level,
+            max_stock_level = :max_stock_level, expiry_days = :expiry_days,
             location_zone = :location_zone, location_aisle = :location_aisle,
             location_rack = :location_rack, location_shelf = :location_shelf,
             location_level = :location_level, location_bin = :location_bin,
@@ -705,7 +710,7 @@ def update_product(product_id: int, business_id: int, name: str, sku_code: str, 
             "name": name, "sku_code": sku_code, "price": price, "uom": uom,
             "par_level": par_level, "reorder_point": reorder_point,
             "safety_stock": safety_stock, "lead_time_days": lead_time_days,
-            "max_stock_level": max_stock_level,
+            "max_stock_level": max_stock_level, "expiry_days": expiry_days,
             "location_zone": location_zone, "location_aisle": location_aisle,
             "location_rack": location_rack, "location_shelf": location_shelf,
             "location_level": location_level, "location_bin": location_bin,
@@ -1616,3 +1621,504 @@ def get_product_analytics(product_id: int, business_id: int, days: int = 90,
     reasons = [dict(r) for r in reason_rows]
 
     return {"daily": daily, "summary": summary, "reasons": reasons}
+
+
+# ── Stock Batches (Expiry Tracking) ──────────────────────────────────────────
+
+def create_stock_batch(
+    product_id: int,
+    business_id: int,
+    quantity: int,
+    purchased_at: str | None = None,
+    expires_at: str | None = None,
+    transaction_id: int | None = None,
+) -> dict:
+    """Insert a new stock batch row."""
+    query = text("""
+        INSERT INTO stock_batches
+            (product_id, business_id, quantity, remaining_qty, purchased_at, expires_at, transaction_id)
+        VALUES
+            (:pid, :biz, :qty, :qty, COALESCE(:purchased_at::timestamptz, NOW()), :expires_at::date, :tx_id)
+        RETURNING id, product_id, business_id, quantity, remaining_qty,
+                  purchased_at, expires_at, is_expired, transaction_id, created_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "pid": product_id, "biz": business_id, "qty": quantity,
+            "purchased_at": purchased_at, "expires_at": expires_at,
+            "tx_id": transaction_id,
+        }).mappings().first()
+    result = dict(row)
+    result["purchased_at"] = str(result["purchased_at"])
+    result["expires_at"] = str(result["expires_at"]) if result["expires_at"] else None
+    result["created_at"] = str(result["created_at"])
+    return result
+
+
+def consume_stock_batches(product_id: int, business_id: int, qty_to_consume: int) -> None:
+    """FIFO deduction from active stock batches when stock is sold/out.
+
+    Consumes from the batch expiring soonest first (NULL expires_at = last).
+    """
+    if qty_to_consume <= 0:
+        return
+
+    fetch_q = text("""
+        SELECT id, remaining_qty FROM stock_batches
+        WHERE product_id = :pid AND business_id = :biz
+          AND remaining_qty > 0 AND is_expired = FALSE
+        ORDER BY expires_at ASC NULLS LAST, purchased_at ASC
+    """)
+    update_q = text("""
+        UPDATE stock_batches SET remaining_qty = :rem WHERE id = :id
+    """)
+
+    with engine.begin() as conn:
+        rows = conn.execute(fetch_q, {"pid": product_id, "biz": business_id}).mappings().all()
+        remaining = qty_to_consume
+        for batch in rows:
+            if remaining <= 0:
+                break
+            deduct = min(remaining, batch["remaining_qty"])
+            new_rem = batch["remaining_qty"] - deduct
+            conn.execute(update_q, {"rem": new_rem, "id": batch["id"]})
+            remaining -= deduct
+
+
+def get_stock_batches_by_product(product_id: int, business_id: int) -> list[dict]:
+    """Return all stock batches for a product, ordered by expiry date."""
+    query = text("""
+        SELECT id, product_id, business_id, quantity, remaining_qty,
+               purchased_at, expires_at, is_expired, transaction_id, created_at
+        FROM stock_batches
+        WHERE product_id = :pid AND business_id = :biz
+        ORDER BY is_expired ASC, expires_at ASC NULLS LAST, purchased_at ASC
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"pid": product_id, "biz": business_id}).mappings().all()
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["purchased_at"] = str(d["purchased_at"])
+        d["expires_at"] = str(d["expires_at"]) if d["expires_at"] else None
+        d["created_at"] = str(d["created_at"])
+        results.append(d)
+    return results
+
+
+def expire_stock_batches_for_business(business_id: int) -> list[dict]:
+    """Find and expire all batches past their expires_at date for a business.
+
+    For each expired batch:
+      1. Mark it as is_expired = TRUE
+      2. Deduct remaining_qty from the product's stock_at_warehouse
+      3. Create an inventory transaction with reason 'expired'
+    Returns a list of expired batch summaries.
+    """
+    fetch_q = text("""
+        SELECT sb.id, sb.product_id, sb.remaining_qty, sb.expires_at,
+               p.stock_at_warehouse, p.name AS product_name
+        FROM stock_batches sb
+        JOIN products p ON p.id = sb.product_id
+        WHERE sb.business_id = :biz
+          AND sb.is_expired = FALSE
+          AND sb.remaining_qty > 0
+          AND sb.expires_at IS NOT NULL
+          AND sb.expires_at < CURRENT_DATE
+    """)
+    mark_q = text("UPDATE stock_batches SET is_expired = TRUE, remaining_qty = 0 WHERE id = :id")
+    update_stock_q = text("""
+        UPDATE products SET stock_at_warehouse = GREATEST(stock_at_warehouse - :qty, 0), updated_at = NOW()
+        WHERE id = :pid AND business_id = :biz
+    """)
+    insert_tx_q = text("""
+        INSERT INTO inventory_transactions
+            (product_id, business_id, created_by, stock_adjusted, previous_stock, current_stock,
+             transaction_at, reason)
+        VALUES
+            (:pid, :biz, 1, :adj, :prev, :curr, NOW(), 'expired')
+    """)
+
+    expired_list = []
+    with engine.begin() as conn:
+        rows = conn.execute(fetch_q, {"biz": business_id}).mappings().all()
+        for r in rows:
+            batch_id = r["id"]
+            pid = r["product_id"]
+            rem = r["remaining_qty"]
+            prev_stock = r["stock_at_warehouse"]
+            new_stock = max(prev_stock - rem, 0)
+
+            conn.execute(mark_q, {"id": batch_id})
+            conn.execute(update_stock_q, {"qty": rem, "pid": pid, "biz": business_id})
+            conn.execute(insert_tx_q, {
+                "pid": pid, "biz": business_id,
+                "adj": -rem, "prev": prev_stock, "curr": new_stock,
+            })
+            expired_list.append({
+                "batch_id": batch_id,
+                "product_id": pid,
+                "product_name": r["product_name"],
+                "expired_qty": rem,
+                "expires_at": str(r["expires_at"]),
+            })
+    return expired_list
+
+
+def get_all_business_ids() -> list[int]:
+    """Return all business IDs."""
+    query = text("SELECT id FROM businesses ORDER BY id")
+    with engine.connect() as conn:
+        rows = conn.execute(query).fetchall()
+    return [r[0] for r in rows]
+
+
+# ── Location Utilization ─────────────────────────────────────────────────────
+
+def get_product_velocity_classification(business_id: int, days: int = 90) -> list[dict]:
+    """Classify products as A/B/C based on outbound volume over last N days.
+
+    A = top 20% by outbound volume (fast movers)
+    B = next 30% (medium movers)
+    C = bottom 50% (slow movers)
+    """
+    query = text("""
+        SELECT
+            p.id, p.name, p.sku_code, p.stock_at_warehouse,
+            p.location_zone, p.location_aisle, p.location_rack,
+            p.location_shelf, p.location_level, p.location_bin,
+            COALESCE(SUM(CASE WHEN t.stock_adjusted < 0
+                              THEN ABS(t.stock_adjusted) ELSE 0 END), 0)::int AS outbound_volume,
+            COUNT(CASE WHEN t.stock_adjusted < 0 THEN 1 END)::int AS outbound_tx_count
+        FROM products p
+        LEFT JOIN inventory_transactions t
+            ON t.product_id = p.id
+           AND t.business_id = p.business_id
+           AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+        WHERE p.business_id = :biz
+        GROUP BY p.id
+        ORDER BY outbound_volume DESC
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id, "days": days}).mappings().all()
+
+    products = [dict(r) for r in rows]
+    total = len(products)
+    if total == 0:
+        return []
+
+    # Calculate daily average and assign ABC class using Pareto thresholds
+    for p in products:
+        p["daily_avg"] = round(p["outbound_volume"] / max(days, 1), 1)
+
+    a_cutoff = max(int(total * 0.2), 1)
+    b_cutoff = a_cutoff + max(int(total * 0.3), 1)
+
+    for i, p in enumerate(products):
+        if i < a_cutoff:
+            p["velocity_class"] = "A"
+        elif i < b_cutoff:
+            p["velocity_class"] = "B"
+        else:
+            p["velocity_class"] = "C"
+
+    return products
+
+
+def get_location_utilization(business_id: int, days: int = 90) -> list[dict]:
+    """Aggregate utilization metrics per zone/aisle."""
+    query = text("""
+        SELECT
+            p.location_zone   AS zone,
+            p.location_aisle  AS aisle,
+            COUNT(DISTINCT p.id)::int AS product_count,
+            COALESCE(SUM(p.stock_at_warehouse), 0)::int AS total_stock,
+            COALESCE(SUM(out_data.outbound_volume), 0)::int AS total_outbound,
+            COALESCE(SUM(out_data.tx_count), 0)::int AS total_tx_count
+        FROM products p
+        LEFT JOIN (
+            SELECT
+                product_id,
+                SUM(CASE WHEN stock_adjusted < 0 THEN ABS(stock_adjusted) ELSE 0 END)::int AS outbound_volume,
+                COUNT(CASE WHEN stock_adjusted < 0 THEN 1 END)::int AS tx_count
+            FROM inventory_transactions
+            WHERE business_id = :biz
+              AND transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+            GROUP BY product_id
+        ) out_data ON out_data.product_id = p.id
+        WHERE p.business_id = :biz
+          AND (p.location_zone IS NOT NULL AND p.location_zone != '')
+        GROUP BY p.location_zone, p.location_aisle
+        ORDER BY total_outbound DESC
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id, "days": days}).mappings().all()
+
+    results = []
+    for r in rows:
+        d = dict(r)
+        d["turnover_rate"] = round(d["total_outbound"] / max(d["total_stock"], 1), 2)
+        results.append(d)
+    return results
+
+
+def generate_placement_suggestions(business_id: int, days: int = 90) -> list[dict]:
+    """Generate smart placement suggestions by cross-referencing product velocity with location priority.
+
+    Returns a list of suggestion dicts with type, priority, product info,
+    current location, suggested location, and description.
+    """
+    # 1. Get product velocity classification
+    products = get_product_velocity_classification(business_id, days)
+    if not products:
+        return []
+
+    # 2. Get location priority config
+    config = get_warehouse_location_configs(business_id)
+    priority_map: dict[str, dict] = {}
+    for c in config:
+        key = f"{c['zone']}|{c['aisle']}" if c["aisle"] else c["zone"]
+        priority_map[key] = c
+
+    def get_location_priority(zone: str, aisle: str) -> int:
+        """Lookup priority for a zone/aisle, defaulting to 3."""
+        if not zone:
+            return 3
+        exact = f"{zone}|{aisle}" if aisle else zone
+        if exact in priority_map:
+            return priority_map[exact]["priority"]
+        # Try zone-level match
+        if zone in priority_map:
+            return priority_map[zone]["priority"]
+        for key, cfg in priority_map.items():
+            if cfg["zone"] == zone and not cfg["aisle"]:
+                return cfg["priority"]
+        return 3  # default
+
+    def get_location_label(zone: str, aisle: str) -> str:
+        if not zone:
+            return "No location"
+        parts = [zone]
+        if aisle:
+            parts.append(f"Aisle {aisle}")
+        return ", ".join(parts)
+
+    # 3. Build lookup of products by location priority
+    products_by_priority: dict[int, list[dict]] = {1: [], 2: [], 3: [], 4: [], 5: []}
+    for p in products:
+        zone = p.get("location_zone") or ""
+        aisle = p.get("location_aisle") or ""
+        p["_priority"] = get_location_priority(zone, aisle)
+        p["_loc_label"] = get_location_label(zone, aisle)
+        if zone:
+            products_by_priority[p["_priority"]].append(p)
+
+    # 4. Find products in premium locations (priority 1-2) that are available for swapping
+    premium_slow = [p for p in products if p["velocity_class"] == "C" and p["_priority"] <= 2 and p.get("location_zone")]
+    deep_fast = [p for p in products if p["velocity_class"] == "A" and p["_priority"] >= 4 and p.get("location_zone")]
+
+    # 5. Find best available locations per priority
+    location_product_count: dict[str, int] = {}
+    for p in products:
+        zone = p.get("location_zone") or ""
+        aisle = p.get("location_aisle") or ""
+        if zone:
+            key = f"{zone}|{aisle}"
+            location_product_count[key] = location_product_count.get(key, 0) + 1
+
+    suggestions: list[dict] = []
+    used_products = set()  # track to avoid duplicate suggestions
+
+    # 5a. Generate SWAP suggestions (A-class in bad spot ↔ C-class in good spot)
+    for fast in deep_fast:
+        if fast["id"] in used_products:
+            continue
+        for slow in premium_slow:
+            if slow["id"] in used_products:
+                continue
+            suggestions.append({
+                "type": "swap",
+                "priority": "high",
+                "product_a": {"id": fast["id"], "name": fast["name"], "sku": fast["sku_code"],
+                              "velocity": fast["velocity_class"], "outbound": fast["outbound_volume"]},
+                "product_b": {"id": slow["id"], "name": slow["name"], "sku": slow["sku_code"],
+                              "velocity": slow["velocity_class"], "outbound": slow["outbound_volume"]},
+                "current_location_a": fast["_loc_label"],
+                "current_location_b": slow["_loc_label"],
+                "suggested_location_a": slow["_loc_label"],
+                "suggested_location_b": fast["_loc_label"],
+                "description": (
+                    f"Swap \"{fast['name']}\" (A-class, {fast['outbound_volume']} units out) "
+                    f"from {fast['_loc_label']} with \"{slow['name']}\" (C-class, {slow['outbound_volume']} units out) "
+                    f"from {slow['_loc_label']}. Fast mover should be in the more accessible location."
+                ),
+            })
+            used_products.add(fast["id"])
+            used_products.add(slow["id"])
+            break
+
+    # 5b. Relocate remaining fast movers in bad locations
+    for p in products:
+        if p["id"] in used_products:
+            continue
+        if p["velocity_class"] == "A" and p["_priority"] >= 4 and p.get("location_zone"):
+            # Find best available premium location
+            best_loc = None
+            for cfg in sorted(config, key=lambda c: c["priority"]):
+                if cfg["priority"] <= 2:
+                    best_loc = cfg
+                    break
+            suggested = f"{best_loc['zone']}" + (f", Aisle {best_loc['aisle']}" if best_loc.get("aisle") else "") if best_loc else "a premium zone (priority 1-2)"
+            suggestions.append({
+                "type": "relocate_fast",
+                "priority": "high",
+                "product": {"id": p["id"], "name": p["name"], "sku": p["sku_code"],
+                            "velocity": p["velocity_class"], "outbound": p["outbound_volume"]},
+                "current_location": p["_loc_label"],
+                "suggested_location": suggested,
+                "description": (
+                    f"\"{p['name']}\" is a fast mover (A-class, {p['outbound_volume']} units/{days}d) "
+                    f"but is stored in {p['_loc_label']} (low-access area). "
+                    f"Move to {suggested} for faster picking."
+                ),
+            })
+            used_products.add(p["id"])
+        elif p["velocity_class"] == "A" and p["_priority"] == 3 and p.get("location_zone"):
+            best_loc = None
+            for cfg in sorted(config, key=lambda c: c["priority"]):
+                if cfg["priority"] <= 2:
+                    best_loc = cfg
+                    break
+            if best_loc:
+                suggested = f"{best_loc['zone']}" + (f", Aisle {best_loc['aisle']}" if best_loc.get("aisle") else "")
+                suggestions.append({
+                    "type": "relocate_fast",
+                    "priority": "medium",
+                    "product": {"id": p["id"], "name": p["name"], "sku": p["sku_code"],
+                                "velocity": p["velocity_class"], "outbound": p["outbound_volume"]},
+                    "current_location": p["_loc_label"],
+                    "suggested_location": suggested,
+                    "description": (
+                        f"\"{p['name']}\" is a fast mover (A-class, {p['outbound_volume']} units/{days}d) "
+                        f"in a normal zone ({p['_loc_label']}). Consider moving to {suggested} for faster picking."
+                    ),
+                })
+                used_products.add(p["id"])
+
+    # 5c. Move slow movers out of premium locations
+    for p in products:
+        if p["id"] in used_products:
+            continue
+        if p["velocity_class"] == "C" and p["_priority"] <= 2 and p.get("location_zone"):
+            deep_loc = None
+            for cfg in sorted(config, key=lambda c: -c["priority"]):
+                if cfg["priority"] >= 4:
+                    deep_loc = cfg
+                    break
+            suggested = f"{deep_loc['zone']}" + (f", Aisle {deep_loc['aisle']}" if deep_loc.get("aisle") else "") if deep_loc else "a lower-priority zone (priority 4-5)"
+            suggestions.append({
+                "type": "move_slow",
+                "priority": "medium",
+                "product": {"id": p["id"], "name": p["name"], "sku": p["sku_code"],
+                            "velocity": p["velocity_class"], "outbound": p["outbound_volume"]},
+                "current_location": p["_loc_label"],
+                "suggested_location": suggested,
+                "description": (
+                    f"\"{p['name']}\" is a slow mover (C-class, {p['outbound_volume']} units/{days}d) "
+                    f"but occupies prime space in {p['_loc_label']}. "
+                    f"Move to {suggested} to free premium space for fast movers."
+                ),
+            })
+            used_products.add(p["id"])
+
+    # 5d. Products without any location assigned
+    for p in products:
+        if p["id"] in used_products:
+            continue
+        zone = p.get("location_zone") or ""
+        if not zone and p["outbound_volume"] > 0:
+            if p["velocity_class"] == "A":
+                best_loc = None
+                for cfg in sorted(config, key=lambda c: c["priority"]):
+                    if cfg["priority"] <= 2:
+                        best_loc = cfg
+                        break
+                suggested = f"{best_loc['zone']}" + (f", Aisle {best_loc['aisle']}" if best_loc.get("aisle") else "") if best_loc else "a premium zone (priority 1-2)"
+            else:
+                suggested = "any available zone"
+            suggestions.append({
+                "type": "assign_location",
+                "priority": "low" if p["velocity_class"] == "C" else "medium",
+                "product": {"id": p["id"], "name": p["name"], "sku": p["sku_code"],
+                            "velocity": p["velocity_class"], "outbound": p["outbound_volume"]},
+                "current_location": "No location assigned",
+                "suggested_location": suggested,
+                "description": (
+                    f"\"{p['name']}\" ({p['velocity_class']}-class) has no warehouse location assigned. "
+                    f"Assign it to {suggested}."
+                ),
+            })
+
+    # Sort: high > medium > low
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    suggestions.sort(key=lambda s: priority_order.get(s["priority"], 9))
+
+    return suggestions
+
+
+# ── Warehouse Location Config CRUD ───────────────────────────────────────────
+
+def get_warehouse_location_configs(business_id: int) -> list[dict]:
+    """Return all location configs for a business."""
+    query = text("""
+        SELECT id, business_id, zone, aisle, priority, label, created_at
+        FROM warehouse_location_config
+        WHERE business_id = :biz
+        ORDER BY priority ASC, zone ASC, aisle ASC
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def upsert_warehouse_location_config(business_id: int, zone: str, aisle: str = "",
+                                       priority: int = 3, label: str = "") -> dict:
+    """Create or update a location config entry."""
+    query = text("""
+        INSERT INTO warehouse_location_config (business_id, zone, aisle, priority, label)
+        VALUES (:biz, :zone, :aisle, :priority, :label)
+        ON CONFLICT (business_id, zone, aisle)
+        DO UPDATE SET priority = :priority, label = :label
+        RETURNING id, business_id, zone, aisle, priority, label, created_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "biz": business_id, "zone": zone, "aisle": aisle,
+            "priority": priority, "label": label,
+        }).mappings().first()
+    return dict(row)
+
+
+def delete_warehouse_location_config(config_id: int, business_id: int) -> bool:
+    """Delete a location config entry. Returns True if deleted."""
+    query = text("""
+        DELETE FROM warehouse_location_config
+        WHERE id = :id AND business_id = :biz
+    """)
+    with engine.begin() as conn:
+        result = conn.execute(query, {"id": config_id, "biz": business_id})
+    return result.rowcount > 0
+
+
+def get_distinct_zones(business_id: int) -> list[dict]:
+    """Return distinct zone/aisle combos from products for auto-suggesting config."""
+    query = text("""
+        SELECT DISTINCT location_zone AS zone, location_aisle AS aisle
+        FROM products
+        WHERE business_id = :biz
+          AND location_zone IS NOT NULL AND location_zone != ''
+        ORDER BY location_zone, location_aisle
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]

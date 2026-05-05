@@ -30,7 +30,7 @@ from email import encoders
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from db import get_all_users_with_alerts_enabled, update_last_alert_sent
+from db import get_all_users_with_alerts_enabled, update_last_alert_sent, expire_stock_batches_for_business, get_all_business_ids
 
 # Load .env from project root (one level up from backend_api/)
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -187,6 +187,31 @@ async def run_stock_alert_job() -> None:
         logger.error("[scheduler] Alert job error: %s", e)
 
 
+# ── Expiry check job ──────────────────────────────────────────────────────────
+
+async def run_expiry_check_job() -> None:
+    """Check all businesses for expired stock batches and auto-deduct them."""
+    logger.info("[scheduler] Running stock expiry check job …")
+    try:
+        business_ids = get_all_business_ids()
+        total_expired = 0
+        for biz_id in business_ids:
+            expired = expire_stock_batches_for_business(biz_id)
+            if expired:
+                total_expired += len(expired)
+                for e in expired:
+                    logger.info(
+                        "[scheduler] Expired batch %d: %s – %d units (expires_at: %s)",
+                        e["batch_id"], e["product_name"], e["expired_qty"], e["expires_at"],
+                    )
+        if total_expired:
+            print(f"[scheduler] Expiry check complete: {total_expired} batch(es) expired.")
+        else:
+            logger.info("[scheduler] Expiry check complete: no expired batches.")
+    except Exception as e:
+        logger.error("[scheduler] Expiry check error: %s", e)
+
+
 # ── Scheduler factory ─────────────────────────────────────────────────────────
 
 def create_scheduler() -> AsyncIOScheduler:
@@ -196,6 +221,13 @@ def create_scheduler() -> AsyncIOScheduler:
         trigger="interval",
         hours=6,
         id="stock_alert",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_expiry_check_job,
+        trigger="interval",
+        hours=24,
+        id="stock_expiry_check",
         replace_existing=True,
     )
     return scheduler

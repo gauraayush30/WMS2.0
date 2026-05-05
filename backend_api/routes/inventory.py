@@ -16,7 +16,12 @@ from db import (
     create_inventory_batch,
     get_inventory_batches,
     get_inventory_batch_detail,
+    get_product_by_id,
+    create_stock_batch,
+    consume_stock_batches,
 )
+
+from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/inventory", tags=["Inventory"])
 
@@ -94,6 +99,27 @@ def create_transaction_endpoint(body: InventoryTransactionCreate, user_id: int =
             reference_no=body.reference_no or None,
             transaction_at=body.transaction_at or None,
         )
+        # Auto-create stock batch for stock-in when product has expiry tracking
+        if body.stock_adjusted > 0 and body.reason in ("stock_in", "delivery"):
+            product = get_product_by_id(body.product_id, biz_id)
+            if product and product.get("expiry_days", 0) > 0:
+                tx_date = body.transaction_at or datetime.now().isoformat()
+                try:
+                    purchased_dt = datetime.fromisoformat(tx_date.replace("Z", "+00:00"))
+                except ValueError:
+                    purchased_dt = datetime.now()
+                expires_dt = (purchased_dt + timedelta(days=product["expiry_days"])).strftime("%Y-%m-%d")
+                create_stock_batch(
+                    product_id=body.product_id,
+                    business_id=biz_id,
+                    quantity=body.stock_adjusted,
+                    purchased_at=tx_date or None,
+                    expires_at=expires_dt,
+                    transaction_id=result.get("id"),
+                )
+        # FIFO consume from batches for stock-out
+        elif body.stock_adjusted < 0 and body.reason in ("stock_out", "shipment"):
+            consume_stock_batches(body.product_id, biz_id, abs(body.stock_adjusted))
         return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -131,6 +157,29 @@ def create_batch_endpoint(body: InventoryBatchCreate, user_id: int = Depends(get
             notes=body.notes,
             transaction_at=body.transaction_at or None,
         )
+        # Auto-create stock batches for stock-in items when product has expiry tracking
+        if body.reason in ("delivery", "stock_in"):
+            for item in body.items:
+                if item.stock_adjusted > 0:
+                    product = get_product_by_id(item.product_id, biz_id)
+                    if product and product.get("expiry_days", 0) > 0:
+                        tx_date = body.transaction_at or datetime.now().isoformat()
+                        try:
+                            purchased_dt = datetime.fromisoformat(tx_date.replace("Z", "+00:00"))
+                        except ValueError:
+                            purchased_dt = datetime.now()
+                        expires_dt = (purchased_dt + timedelta(days=product["expiry_days"])).strftime("%Y-%m-%d")
+                        create_stock_batch(
+                            product_id=item.product_id,
+                            business_id=biz_id,
+                            quantity=item.stock_adjusted,
+                            purchased_at=tx_date or None,
+                            expires_at=expires_dt,
+                        )
+        elif body.reason in ("shipment", "stock_out"):
+            for item in body.items:
+                if item.stock_adjusted < 0:
+                    consume_stock_batches(item.product_id, biz_id, abs(item.stock_adjusted))
         return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

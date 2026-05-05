@@ -20,6 +20,7 @@ import {
   MapPin,
   Brain,
   BarChart3,
+  CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +52,7 @@ interface Product {
   safety_stock: number;
   lead_time_days: number;
   max_stock_level: number;
+  expiry_days: number;
   location_zone: string;
   location_aisle: string;
   location_rack: string;
@@ -239,6 +241,12 @@ export default function ViewProduct() {
       value: product.max_stock_level ?? 0,
       icon: AlertTriangle,
       color: "bg-amber-50 text-amber-600",
+    },
+    {
+      label: "Expiry Days",
+      value: product.expiry_days ? `${product.expiry_days} days` : "No Expiry",
+      icon: CalendarClock,
+      color: "bg-rose-50 text-rose-600",
     },
   ];
 

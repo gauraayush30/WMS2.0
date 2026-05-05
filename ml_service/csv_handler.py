@@ -36,6 +36,8 @@ def generate_csv_template(product_name: str, sku_code: str) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
+
+
 def parse_and_validate_csv(file_bytes: bytes) -> tuple[pd.DataFrame, list[str]]:
     """
     Parse uploaded CSV bytes and validate contents.

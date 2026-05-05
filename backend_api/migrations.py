@@ -356,6 +356,64 @@ def create_ml_model_metadata_table() -> None:
     print("[migrations] ml_model_metadata table is ready.")
 
 
+def migrate_products_table_v4() -> None:
+    """Add expiry_days column to products table."""
+    columns = [
+        ("expiry_days", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    with engine.begin() as conn:
+        for col_name, col_def in columns:
+            check = text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'products' AND column_name = :col
+            """)
+            exists = conn.execute(check, {"col": col_name}).fetchone()
+            if not exists:
+                conn.execute(text(f"ALTER TABLE products ADD COLUMN {col_name} {col_def}"))
+                print(f"[migrations] Added column products.{col_name}")
+    print("[migrations] products table v4 (expiry_days) migration complete.")
+
+
+def create_stock_batches_table() -> None:
+    """Stock batches – tracks individual stock lots with expiry dates."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS stock_batches (
+            id              SERIAL          PRIMARY KEY,
+            product_id      INTEGER         NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            business_id     INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            quantity         INTEGER         NOT NULL,
+            remaining_qty   INTEGER         NOT NULL,
+            purchased_at    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            expires_at      DATE,
+            is_expired      BOOLEAN         NOT NULL DEFAULT FALSE,
+            transaction_id  INTEGER         REFERENCES inventory_transactions(id) ON DELETE SET NULL,
+            created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] stock_batches table is ready.")
+
+
+def create_warehouse_location_config_table() -> None:
+    """Warehouse location config – stores accessibility priority per zone/aisle."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS warehouse_location_config (
+            id            SERIAL          PRIMARY KEY,
+            business_id   INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            zone          VARCHAR(50)     NOT NULL,
+            aisle         VARCHAR(50)     NOT NULL DEFAULT '',
+            priority      INTEGER         NOT NULL DEFAULT 3 CHECK (priority BETWEEN 1 AND 5),
+            label         VARCHAR(100)    DEFAULT '',
+            created_at    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            UNIQUE(business_id, zone, aisle)
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] warehouse_location_config table is ready.")
+
+
 def run_all() -> None:
     """Run all migrations in dependency order."""
     create_businesses_table()
@@ -365,6 +423,7 @@ def run_all() -> None:
     migrate_products_table()
     migrate_products_table_v2()
     migrate_products_table_v3()
+    migrate_products_table_v4()
     create_product_audit_log_table()
     create_inventory_batches_table()
     create_inventory_transactions_table()
@@ -373,6 +432,8 @@ def run_all() -> None:
     create_alert_settings_table()
     create_invites_table()
     create_delivery_locations_table()
+    create_stock_batches_table()
+    create_warehouse_location_config_table()
     create_ml_uploaded_history_table()
     create_ml_model_metadata_table()
     print("[migrations] All migrations complete.")

@@ -10,6 +10,7 @@ import EditProduct from "./pages/products/EditProduct";
 import InventoryPage from "./pages/InventoryPage";
 import InventoryOverviewPage from "./pages/inventory/InventoryOverviewPage";
 import InventoryHistoryPage from "./pages/inventory/InventoryHistoryPage";
+import LocationUtilizationPage from "./pages/inventory/LocationUtilizationPage";
 import BusinessPage from "./pages/BusinessPage";
 import BusinessDetailsPage from "./pages/business/BusinessDetailsPage";
 import InvitesPage from "./pages/business/InvitesPage";
@@ -51,6 +52,7 @@ function AppInner() {
             element={<InventoryOverviewPage />}
           />
           <Route path="/inventory/history" element={<InventoryHistoryPage />} />
+          <Route path="/inventory/location-utilization" element={<LocationUtilizationPage />} />
           <Route path="/business" element={<BusinessPage />} />
           <Route path="/business/details" element={<BusinessDetailsPage />} />
           <Route path="/business/invites" element={<InvitesPage />} />

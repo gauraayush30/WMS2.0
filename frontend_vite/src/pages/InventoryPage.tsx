@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth, API } from "../context/AuthContext";
-import { Package, Warehouse, AlertTriangle, TrendingDown, Eye, ClipboardList, ChevronRight } from "lucide-react";
+import { Package, Warehouse, AlertTriangle, TrendingDown, Eye, ClipboardList, ChevronRight, MapPin, Zap } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { motion } from "framer-motion";
@@ -56,7 +56,7 @@ export default function InventoryPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
           <Link to="/inventory/overview" className="block">
             <Card className="transition-all hover:shadow-md hover:border-primary/40">
@@ -79,6 +79,20 @@ export default function InventoryPage() {
               </CardHeader>
               <CardContent className="flex items-center justify-between text-sm text-muted-foreground">
                 <span>Browse batch transactions and detailed line items</span>
+                <ChevronRight size={16} />
+              </CardContent>
+            </Card>
+          </Link>
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+          <Link to="/inventory/location-utilization" className="block">
+            <Card className="transition-all hover:shadow-md hover:border-primary/40">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base"><MapPin size={18} /> Location Utilization</CardTitle>
+              </CardHeader>
+              <CardContent className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Smart placement suggestions &amp; zone heatmap</span>
                 <ChevronRight size={16} />
               </CardContent>
             </Card>

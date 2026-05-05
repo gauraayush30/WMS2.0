@@ -17,6 +17,7 @@ from db import (
     create_product_audit_entries,
     get_product_audit_log,
     get_product_analytics,
+    get_stock_batches_by_product,
 )
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -48,6 +49,7 @@ class ProductCreate(BaseModel):
     safety_stock: int = Field(default=0, ge=0)
     lead_time_days: int = Field(default=0, ge=0)
     max_stock_level: int = Field(default=0, ge=0)
+    expiry_days: int = Field(default=0, ge=0)
     location_zone: str = Field(default="", max_length=50)
     location_aisle: str = Field(default="", max_length=50)
     location_rack: str = Field(default="", max_length=50)
@@ -66,6 +68,7 @@ class ProductUpdate(BaseModel):
     safety_stock: int = Field(default=0, ge=0)
     lead_time_days: int = Field(default=0, ge=0)
     max_stock_level: int = Field(default=0, ge=0)
+    expiry_days: int = Field(default=0, ge=0)
     location_zone: str = Field(default="", max_length=50)
     location_aisle: str = Field(default="", max_length=50)
     location_rack: str = Field(default="", max_length=50)
@@ -89,6 +92,7 @@ class BulkProductItem(BaseModel):
     safety_stock: int = Field(default=0, ge=0)
     lead_time_days: int = Field(default=0, ge=0)
     max_stock_level: int = Field(default=0, ge=0)
+    expiry_days: int = Field(default=0, ge=0)
     location_zone: str = Field(default="", max_length=50)
     location_aisle: str = Field(default="", max_length=50)
     location_rack: str = Field(default="", max_length=50)
@@ -123,6 +127,7 @@ def create_product_endpoint(body: ProductCreate, user_id: int = Depends(get_curr
         product = create_product(
             body.name, body.sku_code, biz_id, body.price, body.stock_at_warehouse, body.uom,
             body.par_level, body.reorder_point, body.safety_stock, body.lead_time_days, body.max_stock_level,
+            body.expiry_days,
             body.location_zone, body.location_aisle, body.location_rack,
             body.location_shelf, body.location_level, body.location_bin,
         )
@@ -157,6 +162,7 @@ def update_product_endpoint(product_id: int, body: ProductUpdate, user_id: int =
         result = update_product(
             product_id, biz_id, body.name, body.sku_code, body.price, body.uom,
             body.par_level, body.reorder_point, body.safety_stock, body.lead_time_days, body.max_stock_level,
+            body.expiry_days,
             body.location_zone, body.location_aisle, body.location_rack,
             body.location_shelf, body.location_level, body.location_bin,
         )
@@ -173,7 +179,7 @@ def update_product_endpoint(product_id: int, body: ProductUpdate, user_id: int =
             changes.append({"field_name": "price", "old_value": str(existing["price"]), "new_value": str(body.price)})
         if existing.get("uom", "pcs") != body.uom:
             changes.append({"field_name": "uom", "old_value": existing.get("uom", "pcs"), "new_value": body.uom})
-        for field in ("par_level", "reorder_point", "safety_stock", "lead_time_days", "max_stock_level"):
+        for field in ("par_level", "reorder_point", "safety_stock", "lead_time_days", "max_stock_level", "expiry_days"):
             if int(existing.get(field, 0)) != getattr(body, field):
                 changes.append({"field_name": field, "old_value": str(existing.get(field, 0)), "new_value": str(getattr(body, field))})
         for field in ("location_zone", "location_aisle", "location_rack", "location_shelf", "location_level", "location_bin"):
@@ -220,6 +226,7 @@ def bulk_create_products(body: BulkProductRequest, user_id: int = Depends(get_cu
             product = create_product(
                 item.name, item.sku_code, biz_id, item.price, item.stock_at_warehouse, item.uom,
                 item.par_level, item.reorder_point, item.safety_stock, item.lead_time_days, item.max_stock_level,
+                item.expiry_days,
                 item.location_zone, item.location_aisle, item.location_rack,
                 item.location_shelf, item.location_level, item.location_bin,
             )
@@ -272,3 +279,17 @@ def get_product_analytics_endpoint(
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     return get_product_analytics(product_id, biz_id, days, start_date=start_date, end_date=end_date)
+
+
+@router.get("/{product_id}/stock-batches")
+def get_product_stock_batches(
+    product_id: int,
+    user_id: int = Depends(get_current_user_id),
+):
+    """Get all stock batches for a product (for expiry tracking dialog)."""
+    biz_id = _get_user_business_id(user_id)
+    product = get_product_by_id(product_id, biz_id)
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    batches = get_stock_batches_by_product(product_id, biz_id)
+    return {"batches": batches, "product": {"id": product["id"], "name": product["name"], "sku_code": product["sku_code"], "expiry_days": product.get("expiry_days", 0)}}

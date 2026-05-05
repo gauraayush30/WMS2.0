@@ -70,6 +70,7 @@ export default function CreateProduct() {
     safety_stock: "0",
     lead_time_days: "0",
     max_stock_level: "0",
+    expiry_days: "0",
     location_zone: "",
     location_aisle: "",
     location_rack: "",
@@ -113,6 +114,7 @@ export default function CreateProduct() {
           safety_stock: parseInt(form.safety_stock) || 0,
           lead_time_days: parseInt(form.lead_time_days) || 0,
           max_stock_level: parseInt(form.max_stock_level) || 0,
+          expiry_days: parseInt(form.expiry_days) || 0,
           location_zone: form.location_zone.trim(),
           location_aisle: form.location_aisle.trim(),
           location_rack: form.location_rack.trim(),
@@ -137,6 +139,7 @@ export default function CreateProduct() {
         safety_stock: "0",
         lead_time_days: "0",
         max_stock_level: "0",
+        expiry_days: "0",
         location_zone: "",
         location_aisle: "",
         location_rack: "",
@@ -478,6 +481,19 @@ export default function CreateProduct() {
                             set("max_stock_level", e.target.value)
                           }
                         />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Expiry Days</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          placeholder="0 = no expiry"
+                          value={form.expiry_days}
+                          onChange={(e) =>
+                            set("expiry_days", e.target.value)
+                          }
+                        />
+                        <p className="text-[10px] text-muted-foreground">Stock expires after this many days from purchase. 0 = no expiry.</p>
                       </div>
                     </div>
                   </div>
