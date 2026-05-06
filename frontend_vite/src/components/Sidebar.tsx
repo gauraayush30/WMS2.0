@@ -8,24 +8,46 @@ import {
   ChevronLeft,
   ChevronRight,
   FileBarChart,
+  Warehouse as WarehouseIcon,
+  Briefcase,
+  PackagePlus,
+  Truck,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
+import { useAuth } from "../context/AuthContext";
 
-const navItems = [
+interface NavItem {
+  to: string;
+  icon: typeof LayoutDashboard;
+  label: string;
+  /** Roles that may see this item. Empty array = visible to all authenticated users. */
+  roles?: string[];
+}
+
+const ALL_NAV_ITEMS: NavItem[] = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/products", icon: Package, label: "Products" },
+  { to: "/inbounds", icon: PackagePlus, label: "Inbounds" },
+  { to: "/outbounds", icon: Truck, label: "Outbounds" },
   { to: "/inventory", icon: ArrowLeftRight, label: "Inventory" },
-  { to: "/business", icon: Building2, label: "Business" },
+  { to: "/customers", icon: Briefcase, label: "Customers", roles: ["warehouse_admin", "warehouse_staff"] },
+  { to: "/warehouses", icon: WarehouseIcon, label: "Warehouses", roles: ["warehouse_admin", "warehouse_staff"] },
+  { to: "/business", icon: Building2, label: "Business", roles: ["warehouse_admin"] },
   { to: "/reports", icon: FileBarChart, label: "Reports" },
-  { to: "/users", icon: Users, label: "Users" },
+  { to: "/users", icon: Users, label: "Users", roles: ["warehouse_admin"] },
 ];
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+  const { user } = useAuth();
+  const role = user?.role || "";
+  const navItems = ALL_NAV_ITEMS.filter(
+    (item) => !item.roles || item.roles.includes(role),
+  );
 
   return (
     <aside

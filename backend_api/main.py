@@ -20,6 +20,11 @@ from routes.legacy import router as legacy_router
 from routes.ml_proxy import router as ml_proxy_router
 from routes.reports import router as reports_router
 from routes.location_utilization import router as location_utilization_router
+from routes.warehouses import router as warehouses_router
+from routes.customers import router as customers_router
+from routes.inbounds import router as inbounds_router
+from routes.outbounds import router as outbounds_router
+from routes.analytics import router as analytics_router
 
 
 @asynccontextmanager
@@ -55,3 +60,8 @@ app.include_router(legacy_router)
 app.include_router(ml_proxy_router)
 app.include_router(reports_router)
 app.include_router(location_utilization_router)
+app.include_router(warehouses_router)
+app.include_router(customers_router)
+app.include_router(inbounds_router)
+app.include_router(outbounds_router)
+app.include_router(analytics_router)

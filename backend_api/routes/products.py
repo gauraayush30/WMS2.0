@@ -5,12 +5,19 @@ Product routes – CRUD + bulk upload + SKU check + audit log.
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel, Field
 
-from auth import get_current_user_id
+from auth import (
+    get_current_user_id,
+    get_user_context,
+    UserContext,
+)
 from db import (
     get_user_by_id,
     create_product,
+    create_product_scoped,
     get_products_by_business,
+    get_products_scoped,
     get_product_by_id,
+    get_product_scoped,
     update_product,
     delete_product,
     check_skus_exist,
@@ -18,6 +25,8 @@ from db import (
     get_product_audit_log,
     get_product_analytics,
     get_stock_batches_by_product,
+    get_default_customer_id,
+    get_default_warehouse_id,
 )
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -41,6 +50,16 @@ def _get_user_business_id(user_id: int) -> int:
 class ProductCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     sku_code: str = Field(..., min_length=1, max_length=100)
+    customer_id: int | None = Field(
+        default=None,
+        description="Customer (tenant) that owns this SKU. Required for warehouse "
+                    "roles; ignored for customer roles (forced to own customer).",
+    )
+    warehouse_id: int | None = Field(
+        default=None,
+        description="Warehouse where stock is held. Defaults to the business's "
+                    "first / 'MAIN' warehouse when omitted.",
+    )
     price: float = Field(default=0, ge=0)
     stock_at_warehouse: int = Field(default=0, ge=0)
     uom: str = Field(default="pcs", max_length=50)
@@ -112,46 +131,96 @@ def list_products(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     search: str = Query(""),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None),
+    warehouse_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
 ):
-    """List products for the user's business (paginated, searchable)."""
-    biz_id = _get_user_business_id(user_id)
-    return get_products_by_business(biz_id, page, per_page, search)
+    """List products visible to the caller.
+
+    - Warehouse roles see all customers' products by default; pass `customer_id`
+      to filter to one. Pass `warehouse_id` to filter by site.
+    - Customer roles always see only their own customer's products.
+    """
+    effective_cust = ctx.resolve_customer_filter(customer_id)
+    return get_products_scoped(
+        ctx.business_id, effective_cust, warehouse_id, page, per_page, search,
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_product_endpoint(body: ProductCreate, user_id: int = Depends(get_current_user_id)):
-    """Create a new product for the user's business."""
-    biz_id = _get_user_business_id(user_id)
-    try:
-        product = create_product(
-            body.name, body.sku_code, biz_id, body.price, body.stock_at_warehouse, body.uom,
-            body.par_level, body.reorder_point, body.safety_stock, body.lead_time_days, body.max_stock_level,
-            body.expiry_days,
-            body.location_zone, body.location_aisle, body.location_rack,
-            body.location_shelf, body.location_level, body.location_bin,
+def create_product_endpoint(
+    body: ProductCreate,
+    ctx: UserContext = Depends(get_user_context),
+):
+    """Create a new product owned by a customer at a specific warehouse."""
+    # Resolve customer_id
+    if ctx.is_customer:
+        cust_id = ctx.customer_id
+    else:
+        cust_id = body.customer_id
+        if not cust_id:
+            # Fall back to the business's default customer for backward compat
+            cust_id = get_default_customer_id(ctx.business_id)
+            if not cust_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="customer_id is required when creating a product",
+                )
+
+    # Resolve warehouse_id
+    wh_id = body.warehouse_id or get_default_warehouse_id(ctx.business_id)
+    if not wh_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No warehouses configured for this business",
         )
-        return product
+
+    try:
+        return create_product_scoped(
+            name=body.name, sku_code=body.sku_code,
+            business_id=ctx.business_id,
+            customer_id=cust_id, warehouse_id=wh_id,
+            price=body.price, stock_at_warehouse=body.stock_at_warehouse, uom=body.uom,
+            par_level=body.par_level, reorder_point=body.reorder_point,
+            safety_stock=body.safety_stock, lead_time_days=body.lead_time_days,
+            max_stock_level=body.max_stock_level, expiry_days=body.expiry_days,
+            location_zone=body.location_zone, location_aisle=body.location_aisle,
+            location_rack=body.location_rack, location_shelf=body.location_shelf,
+            location_level=body.location_level, location_bin=body.location_bin,
+        )
     except Exception as e:
         if "unique" in str(e).lower() or "duplicate" in str(e).lower():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A product with this SKU code already exists")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A product with this SKU code already exists for this customer",
+            )
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @router.get("/{product_id}")
-def get_product_endpoint(product_id: int, user_id: int = Depends(get_current_user_id)):
-    """Get a single product by ID."""
-    biz_id = _get_user_business_id(user_id)
-    product = get_product_by_id(product_id, biz_id)
+def get_product_endpoint(product_id: int, ctx: UserContext = Depends(get_user_context)):
+    """Get a single product, scoped to the caller's tenancy."""
+    cust_filter = ctx.resolve_customer_filter(None)
+    product = get_product_scoped(product_id, ctx.business_id, cust_filter)
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     return product
 
 
 @router.put("/{product_id}")
-def update_product_endpoint(product_id: int, body: ProductUpdate, user_id: int = Depends(get_current_user_id)):
+def update_product_endpoint(
+    product_id: int,
+    body: ProductUpdate,
+    ctx: UserContext = Depends(get_user_context),
+):
     """Update a product. Automatically logs which fields were changed and by whom."""
-    biz_id = _get_user_business_id(user_id)
+    biz_id = ctx.business_id
+    user_id = ctx.user_id
+
+    # Tenant guard: ensure the product belongs to the caller's customer (when set)
+    cust_filter = ctx.resolve_customer_filter(None)
+    if not get_product_scoped(product_id, biz_id, cust_filter):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
     # Fetch the current product state before updating
     existing = get_product_by_id(product_id, biz_id)
@@ -199,10 +268,15 @@ def update_product_endpoint(product_id: int, body: ProductUpdate, user_id: int =
 
 
 @router.delete("/{product_id}")
-def delete_product_endpoint(product_id: int, user_id: int = Depends(get_current_user_id)):
-    """Delete a product."""
-    biz_id = _get_user_business_id(user_id)
-    deleted = delete_product(product_id, biz_id)
+def delete_product_endpoint(
+    product_id: int,
+    ctx: UserContext = Depends(get_user_context),
+):
+    """Delete a product (tenant-scoped)."""
+    cust_filter = ctx.resolve_customer_filter(None)
+    if not get_product_scoped(product_id, ctx.business_id, cust_filter):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    deleted = delete_product(product_id, ctx.business_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     return {"message": "Product deleted"}

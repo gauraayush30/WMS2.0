@@ -1,7 +1,11 @@
-import React from "react";
 import { Line } from "react-chartjs-2";
+import type { ChartOptions } from "chart.js";
 
-function HistoryTab({ data, meta, skuInfo, loading }) {
+interface HistoryDataPoint { date: string; sales_qty: number; purchase_qty: number; stock_level: number }
+interface HistoryMeta { current_stock: number }
+interface HistorySkuInfo { sku_name: string; total_records: number }
+
+function HistoryTab({ data, meta, skuInfo, loading }: { data: HistoryDataPoint[]; meta: HistoryMeta | null; skuInfo: HistorySkuInfo | null; loading: boolean }) {
   if (loading) return <p className="loading">Loading data&hellip;</p>;
   if (data.length === 0) return <p className="no-data">No data available.</p>;
 
@@ -30,24 +34,22 @@ function HistoryTab({ data, meta, skuInfo, loading }) {
     ],
   };
 
-  const chartOpts = {
+  const chartOpts: ChartOptions<"line"> = {
     responsive: true,
-    plugins: { legend: { position: "top" }, title: { display: true, text: "Sales and Stock History" } },
+    plugins: { legend: { position: "top" as const }, title: { display: true, text: "Sales and Stock History" } },
     scales: {
       x: {
         title: {
           display: true,
-          text: 'Timestamps', // X-axis label
+          text: 'Timestamps',
         },
-        // ... other x-axis configurations like ticks, etc.
       },
       y: {
         title: {
           display: true,
-          text: 'Quantity', // Y-axis label
+          text: 'Quantity',
         },
-        beginAtZero: true, // Common option to start the y-axis at zero
-        // ... other y-axis configurations
+        beginAtZero: true,
       },
     },
   };
@@ -86,7 +88,7 @@ function HistoryTab({ data, meta, skuInfo, loading }) {
             </tr>
           </thead>
           <tbody>
-            {data.map((item, i) => (
+            {data.map((item: HistoryDataPoint, i: number) => (
               <tr key={i}>
                 <td>{item.date}</td>
                 <td>{item.sales_qty} units</td>

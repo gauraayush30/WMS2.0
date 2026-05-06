@@ -1,7 +1,10 @@
-import React from "react";
 import { Line } from "react-chartjs-2";
+import type { ChartOptions } from "chart.js";
 
-function ForecastTab({ data, meta, loading }) {
+interface ForecastDataPoint { date: string; predicted_sales: number }
+interface ForecastMeta { current_stock: number; total_forecast_demand: number; stock_status: string }
+
+function ForecastTab({ data, meta, loading }: { data: ForecastDataPoint[]; meta: ForecastMeta | null; loading: boolean }) {
   if (loading) return <p className="loading">Loading data&hellip;</p>;
   if (data.length === 0) return <p className="no-data">No data available.</p>;
 
@@ -20,24 +23,22 @@ function ForecastTab({ data, meta, loading }) {
     ],
   };
 
-  const chartOpts = {
+  const chartOpts: ChartOptions<"line"> = {
     responsive: true,
-    plugins: { legend: { position: "top" }, title: { display: true, text: "Forecasted Sales" } },
+    plugins: { legend: { position: "top" as const }, title: { display: true, text: "Forecasted Sales" } },
     scales: {
       x: {
         title: {
           display: true,
-          text: 'Timestamps', // X-axis label
+          text: 'Timestamps',
         },
-        // ... other x-axis configurations like ticks, etc.
       },
       y: {
         title: {
           display: true,
-          text: 'Quantity', // Y-axis label
+          text: 'Quantity',
         },
-        beginAtZero: true, // Common option to start the y-axis at zero
-        // ... other y-axis configurations
+        beginAtZero: true,
       },
     },
   };
@@ -77,7 +78,7 @@ function ForecastTab({ data, meta, loading }) {
             </tr>
           </thead>
           <tbody>
-            {data.map((item, i) => (
+            {data.map((item: ForecastDataPoint, i: number) => (
               <tr key={i}>
                 <td>{item.date}</td>
                 <td>{item.predicted_sales} units </td>

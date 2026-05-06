@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Select } from "@/components/ui/select";
 import {
   TrendingUp,
   ArrowUpDown,
@@ -369,8 +368,8 @@ export default function ProductAnalyticsTab({
           </Badge>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Select
-            className={`w-35 h-8 text-xs ${rangeMode === "custom" ? "opacity-50" : ""}`}
+          <select
+            className={`flex h-8 w-35 rounded-md border border-input bg-transparent px-3 py-1 text-xs shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${rangeMode === "custom" ? "opacity-50" : ""}`}
             value={rangeMode === "preset" ? days : ""}
             onChange={(e) => {
               if (e.target.value) handleDaysChange(e.target.value);
@@ -382,7 +381,7 @@ export default function ProductAnalyticsTab({
             <option value="180">Last 6 months</option>
             <option value="365">Last year</option>
             {rangeMode === "custom" && <option value="">Custom range</option>}
-          </Select>
+          </select>
           <div className="flex items-center gap-1.5">
             <input
               type="date"

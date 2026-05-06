@@ -447,7 +447,8 @@ def create_user(name: str, email: str, hashed_password: str) -> dict:
 def get_user_by_email(email: str) -> dict | None:
     """Return a user row by email, or None if not found."""
     query = text("""
-        SELECT id, username, name, email, hashed_password, business_id, role, is_active, created_at
+        SELECT id, username, name, email, hashed_password, business_id, role,
+               customer_id, is_active, created_at
         FROM users
         WHERE email = :email
         LIMIT 1
@@ -460,7 +461,8 @@ def get_user_by_email(email: str) -> dict | None:
 def get_user_by_id(user_id: int) -> dict | None:
     """Return a user row by id, or None if not found."""
     query = text("""
-        SELECT id, username, name, email, is_active, created_at, business_id, role
+        SELECT id, username, name, email, is_active, created_at,
+               business_id, role, customer_id
         FROM users
         WHERE id = :user_id
         LIMIT 1
@@ -814,30 +816,40 @@ def check_skus_exist(business_id: int, sku_codes: list[str]) -> list[str]:
 
 # ── Inventory Overview ───────────────────────────────────────────────────────
 
-def get_inventory_overview(business_id: int, page: int = 1, per_page: int = 20, search: str = "") -> dict:
-    """Return all products with current stock for a business (paginated)."""
+def get_inventory_overview(
+    business_id: int,
+    customer_id: int | None = None,
+    page: int = 1,
+    per_page: int = 20,
+    search: str = "",
+) -> dict:
+    """Return all products with current stock for a business (paginated).
+
+    `customer_id=None` shows all customers (warehouse view).
+    """
     offset = (page - 1) * per_page
     search_pattern = f"%{search}%"
 
-    count_query = text("""
-        SELECT COUNT(*)::int AS total FROM products
-        WHERE business_id = :biz
-          AND (name ILIKE :search OR sku_code ILIKE :search)
-    """)
-    data_query = text("""
-        SELECT id, name, sku_code, price, stock_at_warehouse, uom, updated_at
-        FROM products
-        WHERE business_id = :biz
-          AND (name ILIKE :search OR sku_code ILIKE :search)
-        ORDER BY name
+    where = ["p.business_id = :biz", "(p.name ILIKE :search OR p.sku_code ILIKE :search)"]
+    params: dict = {"biz": business_id, "search": search_pattern}
+    if customer_id is not None:
+        where.append("p.customer_id = :cust")
+        params["cust"] = customer_id
+
+    where_sql = " AND ".join(where)
+    count_query = text(f"SELECT COUNT(*)::int AS total FROM products p WHERE {where_sql}")
+    data_query = text(f"""
+        SELECT p.id, p.name, p.sku_code, p.price, p.stock_at_warehouse, p.uom, p.updated_at,
+               p.customer_id, c.name AS customer_name, c.code AS customer_code
+        FROM products p
+        LEFT JOIN customers c ON c.id = p.customer_id
+        WHERE {where_sql}
+        ORDER BY p.name
         LIMIT :limit OFFSET :offset
     """)
     with engine.connect() as conn:
-        total = conn.execute(count_query, {"biz": business_id, "search": search_pattern}).scalar()
-        rows = conn.execute(data_query, {
-            "biz": business_id, "search": search_pattern,
-            "limit": per_page, "offset": offset,
-        }).mappings().all()
+        total = conn.execute(count_query, params).scalar()
+        rows = conn.execute(data_query, {**params, "limit": per_page, "offset": offset}).mappings().all()
     return {
         "products": [dict(r) for r in rows],
         "total": total,
@@ -2122,3 +2134,1490 @@ def get_distinct_zones(business_id: int) -> list[dict]:
     with engine.connect() as conn:
         rows = conn.execute(query, {"biz": business_id}).mappings().all()
     return [dict(r) for r in rows]
+
+
+# ============================================================================
+# WMS 2.0 v5 — Multi-tenant: warehouses + customers + scoped lookups
+# ============================================================================
+
+# ── Warehouses ──────────────────────────────────────────────────────────────
+
+WAREHOUSE_COLUMNS = (
+    "id, business_id, name, code, address, city, state, zip_code, "
+    "is_active, created_at, updated_at"
+)
+
+
+def list_warehouses(business_id: int, include_inactive: bool = False) -> list[dict]:
+    where = "business_id = :biz" + ("" if include_inactive else " AND is_active = TRUE")
+    query = text(f"SELECT {WAREHOUSE_COLUMNS} FROM warehouses WHERE {where} ORDER BY name")
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_warehouse_by_id(warehouse_id: int, business_id: int) -> dict | None:
+    query = text(f"""
+        SELECT {WAREHOUSE_COLUMNS} FROM warehouses
+        WHERE id = :id AND business_id = :biz
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"id": warehouse_id, "biz": business_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def create_warehouse(business_id: int, name: str, code: str, address: str = "",
+                     city: str = "", state: str = "", zip_code: str = "") -> dict:
+    query = text(f"""
+        INSERT INTO warehouses (business_id, name, code, address, city, state, zip_code)
+        VALUES (:biz, :name, :code, :addr, :city, :state, :zip)
+        RETURNING {WAREHOUSE_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "biz": business_id, "name": name, "code": code,
+            "addr": address, "city": city, "state": state, "zip": zip_code,
+        }).mappings().first()
+    return dict(row)
+
+
+def update_warehouse(warehouse_id: int, business_id: int, *, name: str, code: str,
+                     address: str, city: str, state: str, zip_code: str,
+                     is_active: bool) -> dict | None:
+    query = text(f"""
+        UPDATE warehouses
+        SET name = :name, code = :code, address = :addr, city = :city,
+            state = :state, zip_code = :zip, is_active = :active, updated_at = NOW()
+        WHERE id = :id AND business_id = :biz
+        RETURNING {WAREHOUSE_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "id": warehouse_id, "biz": business_id,
+            "name": name, "code": code, "addr": address, "city": city,
+            "state": state, "zip": zip_code, "active": is_active,
+        }).mappings().fetchone()
+    return dict(row) if row else None
+
+
+# ── Customers ───────────────────────────────────────────────────────────────
+
+CUSTOMER_COLUMNS = (
+    "id, business_id, name, code, contact_name, contact_email, contact_phone, "
+    "is_active, created_at, updated_at"
+)
+
+
+def list_customers(business_id: int, include_inactive: bool = False) -> list[dict]:
+    where = "business_id = :biz" + ("" if include_inactive else " AND is_active = TRUE")
+    query = text(f"SELECT {CUSTOMER_COLUMNS} FROM customers WHERE {where} ORDER BY name")
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_customer_by_id(customer_id: int, business_id: int) -> dict | None:
+    query = text(f"""
+        SELECT {CUSTOMER_COLUMNS} FROM customers
+        WHERE id = :id AND business_id = :biz
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"id": customer_id, "biz": business_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def create_customer(business_id: int, name: str, code: str,
+                    contact_name: str = "", contact_email: str = "",
+                    contact_phone: str = "") -> dict:
+    query = text(f"""
+        INSERT INTO customers (business_id, name, code, contact_name, contact_email, contact_phone)
+        VALUES (:biz, :name, :code, :cname, :cemail, :cphone)
+        RETURNING {CUSTOMER_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "biz": business_id, "name": name, "code": code,
+            "cname": contact_name, "cemail": contact_email, "cphone": contact_phone,
+        }).mappings().first()
+    return dict(row)
+
+
+def update_customer(customer_id: int, business_id: int, *, name: str, code: str,
+                    contact_name: str, contact_email: str, contact_phone: str,
+                    is_active: bool) -> dict | None:
+    query = text(f"""
+        UPDATE customers
+        SET name = :name, code = :code, contact_name = :cname, contact_email = :cemail,
+            contact_phone = :cphone, is_active = :active, updated_at = NOW()
+        WHERE id = :id AND business_id = :biz
+        RETURNING {CUSTOMER_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "id": customer_id, "biz": business_id,
+            "name": name, "code": code, "cname": contact_name,
+            "cemail": contact_email, "cphone": contact_phone, "active": is_active,
+        }).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def get_default_customer_id(business_id: int) -> int | None:
+    """Return the id of the 'DEFAULT' customer for a business (created by backfill)."""
+    row = None
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT id FROM customers WHERE business_id = :biz AND code = 'DEFAULT' LIMIT 1"
+        ), {"biz": business_id}).fetchone()
+    return int(row[0]) if row else None
+
+
+def get_default_warehouse_id(business_id: int) -> int | None:
+    """Return the id of the 'MAIN' warehouse for a business (created by backfill)."""
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT id FROM warehouses WHERE business_id = :biz AND code = 'MAIN' LIMIT 1"
+        ), {"biz": business_id}).fetchone()
+    return int(row[0]) if row else None
+
+
+# ── Tenancy-scoped product helpers ──────────────────────────────────────────
+
+def get_products_scoped(
+    business_id: int,
+    customer_id: int | None,
+    warehouse_id: int | None,
+    page: int = 1,
+    per_page: int = 20,
+    search: str = "",
+) -> dict:
+    """Paginated products with optional customer / warehouse filters.
+
+    `customer_id=None` means "all customers under this business" (warehouse view).
+    `warehouse_id=None` means "all warehouses".
+    """
+    offset = (page - 1) * per_page
+    where = ["p.business_id = :biz", "(p.name ILIKE :q OR p.sku_code ILIKE :q)"]
+    params: dict = {"biz": business_id, "q": f"%{search}%"}
+    if customer_id is not None:
+        where.append("p.customer_id = :cust"); params["cust"] = customer_id
+    if warehouse_id is not None:
+        where.append("p.warehouse_id = :wh"); params["wh"] = warehouse_id
+
+    where_sql = " AND ".join(where)
+    count_q = text(f"SELECT COUNT(*)::int FROM products p WHERE {where_sql}")
+    data_q = text(f"""
+        SELECT p.*, c.name AS customer_name, c.code AS customer_code
+        FROM products p
+        LEFT JOIN customers c ON c.id = p.customer_id
+        WHERE {where_sql}
+        ORDER BY p.name
+        LIMIT :limit OFFSET :offset
+    """)
+    with engine.connect() as conn:
+        total = conn.execute(count_q, params).scalar()
+        rows = conn.execute(data_q, {**params, "limit": per_page, "offset": offset}).mappings().all()
+    return {
+        "products": [dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page if total else 0,
+    }
+
+
+def get_product_scoped(product_id: int, business_id: int,
+                       customer_id: int | None) -> dict | None:
+    """Get a product enforcing customer scope when set."""
+    where = ["id = :id", "business_id = :biz"]
+    params: dict = {"id": product_id, "biz": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :cust"); params["cust"] = customer_id
+    query = text(f"""
+        SELECT {PRODUCT_COLUMNS}, customer_id, warehouse_id
+        FROM products WHERE {' AND '.join(where)}
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, params).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def create_product_scoped(
+    *, name: str, sku_code: str, business_id: int,
+    customer_id: int, warehouse_id: int,
+    price: float = 0, stock_at_warehouse: int = 0, uom: str = "pcs",
+    par_level: int = 0, reorder_point: int = 0, safety_stock: int = 0,
+    lead_time_days: int = 0, max_stock_level: int = 0, expiry_days: int = 0,
+    location_zone: str = "", location_aisle: str = "", location_rack: str = "",
+    location_shelf: str = "", location_level: str = "", location_bin: str = "",
+) -> dict:
+    """Create a product owned by (business, customer) and stored at warehouse."""
+    query = text(f"""
+        INSERT INTO products (
+            name, sku_code, business_id, customer_id, warehouse_id,
+            price, stock_at_warehouse, uom,
+            par_level, reorder_point, safety_stock, lead_time_days, max_stock_level,
+            expiry_days,
+            location_zone, location_aisle, location_rack, location_shelf, location_level, location_bin
+        ) VALUES (
+            :name, :sku, :biz, :cust, :wh,
+            :price, :stock, :uom,
+            :par, :rp, :ss, :ltd, :max,
+            :ed,
+            :lz, :la, :lr, :ls, :ll, :lb
+        )
+        RETURNING {PRODUCT_COLUMNS}, customer_id, warehouse_id
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "name": name, "sku": sku_code, "biz": business_id,
+            "cust": customer_id, "wh": warehouse_id,
+            "price": price, "stock": stock_at_warehouse, "uom": uom,
+            "par": par_level, "rp": reorder_point, "ss": safety_stock,
+            "ltd": lead_time_days, "max": max_stock_level, "ed": expiry_days,
+            "lz": location_zone, "la": location_aisle, "lr": location_rack,
+            "ls": location_shelf, "ll": location_level, "lb": location_bin,
+        }).mappings().first()
+    return dict(row)
+
+
+# ── User onboarding (customer staff) ────────────────────────────────────────
+
+def create_user_for_customer(
+    *, username: str, name: str, email: str, hashed_password: str,
+    business_id: int, customer_id: int, role: str = "customer_staff",
+) -> dict:
+    """Create a user attached to a customer (role = customer_admin / customer_staff)."""
+    query = text("""
+        INSERT INTO users (username, name, email, hashed_password,
+                           business_id, customer_id, role, is_active)
+        VALUES (:un, :n, :e, :hp, :biz, :cust, :role, TRUE)
+        RETURNING id, username, name, email, business_id, customer_id, role,
+                  is_active, created_at
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "un": username, "n": name, "e": email, "hp": hashed_password,
+            "biz": business_id, "cust": customer_id, "role": role,
+        }).mappings().first()
+    return dict(row)
+
+
+def list_users_for_customer(business_id: int, customer_id: int) -> list[dict]:
+    query = text("""
+        SELECT id, username, name, email, role, is_active, created_at
+        FROM users
+        WHERE business_id = :biz AND customer_id = :cust
+        ORDER BY created_at DESC
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id, "cust": customer_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def list_users_for_warehouse(business_id: int) -> list[dict]:
+    """List warehouse staff (role in WAREHOUSE_ROLES) for a business."""
+    query = text("""
+        SELECT id, username, name, email, role, customer_id, is_active, created_at
+        FROM users
+        WHERE business_id = :biz
+          AND role IN ('warehouse_admin', 'warehouse_staff')
+        ORDER BY role, name
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+# ============================================================================
+# Phase 5 — Trend analytics (FIFO/FEFO, Complete, Behavior)
+# ============================================================================
+
+def get_fifo_fefo_compliance(
+    business_id: int, customer_id: int | None,
+    from_date: str | None = None, to_date: str | None = None,
+) -> dict:
+    """Compute FIFO and FEFO compliance scores by replaying outbound_picks.
+
+    For each pick, we check whether the consumed batch was the optimal one
+    available at pick time (the oldest by purchased_at for FIFO, earliest by
+    expires_at for FEFO). Compliance = compliant_picks / total_picks.
+    """
+    where = ["op.transaction_id IS NOT NULL", "ol.outbound_id = oo.id",
+             "oo.business_id = :biz", "oo.status = 'shipped'"]
+    params: dict = {"biz": business_id}
+    if customer_id is not None:
+        where.append("oo.customer_id = :cust"); params["cust"] = customer_id
+    if from_date:
+        where.append("oo.shipped_at >= :fd"); params["fd"] = from_date
+    if to_date:
+        where.append("oo.shipped_at <= :td"); params["td"] = to_date
+
+    where_sql = " AND ".join(where)
+
+    query = text(f"""
+        WITH pick_events AS (
+            SELECT op.id            AS pick_id,
+                   op.outbound_line_id,
+                   op.stock_batch_id AS picked_batch_id,
+                   op.qty,
+                   op.transaction_id,
+                   ol.product_id,
+                   oo.id             AS outbound_id,
+                   oo.customer_id,
+                   it.transaction_at AS picked_at,
+                   sb.purchased_at   AS picked_purchased_at,
+                   sb.expires_at     AS picked_expires_at
+            FROM outbound_picks op
+            JOIN outbound_lines ol ON ol.id = op.outbound_line_id
+            JOIN outbound_orders oo ON oo.id = ol.outbound_id
+            JOIN inventory_transactions it ON it.id = op.transaction_id
+            JOIN stock_batches sb ON sb.id = op.stock_batch_id
+            WHERE {where_sql}
+        )
+        SELECT
+            COUNT(*)                                                  AS total_picks,
+            COALESCE(SUM(qty), 0)                                     AS total_qty,
+            -- FIFO compliant: picked batch's purchased_at <= every other batch
+            -- with remaining_qty > 0 at pick time
+            COUNT(*) FILTER (WHERE NOT EXISTS (
+                SELECT 1 FROM stock_batches sb2
+                JOIN inventory_transactions it2 ON it2.id = sb2.transaction_id
+                WHERE sb2.product_id = pe.product_id
+                  AND sb2.customer_id = pe.customer_id
+                  AND sb2.id <> pe.picked_batch_id
+                  AND it2.transaction_at < pe.picked_at
+                  AND sb2.purchased_at < pe.picked_purchased_at
+            ))                                                        AS fifo_compliant_picks,
+            COUNT(*) FILTER (WHERE NOT EXISTS (
+                SELECT 1 FROM stock_batches sb3
+                JOIN inventory_transactions it3 ON it3.id = sb3.transaction_id
+                WHERE sb3.product_id = pe.product_id
+                  AND sb3.customer_id = pe.customer_id
+                  AND sb3.id <> pe.picked_batch_id
+                  AND it3.transaction_at < pe.picked_at
+                  AND sb3.expires_at IS NOT NULL
+                  AND pe.picked_expires_at IS NOT NULL
+                  AND sb3.expires_at < pe.picked_expires_at
+            ))                                                        AS fefo_compliant_picks
+        FROM pick_events pe
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, params).mappings().fetchone()
+    d = dict(row) if row else {}
+    total = int(d.get("total_picks", 0) or 0)
+    fifo_pct = (
+        100.0 * float(d.get("fifo_compliant_picks", 0) or 0) / total
+        if total else None
+    )
+    fefo_pct = (
+        100.0 * float(d.get("fefo_compliant_picks", 0) or 0) / total
+        if total else None
+    )
+    return {
+        "total_picks": total,
+        "total_qty": int(d.get("total_qty", 0) or 0),
+        "fifo_compliant_picks": int(d.get("fifo_compliant_picks", 0) or 0),
+        "fefo_compliant_picks": int(d.get("fefo_compliant_picks", 0) or 0),
+        "fifo_compliance_pct": round(fifo_pct, 2) if fifo_pct is not None else None,
+        "fefo_compliance_pct": round(fefo_pct, 2) if fefo_pct is not None else None,
+    }
+
+
+def get_aging_buckets(business_id: int, customer_id: int | None) -> list[dict]:
+    """Histogram of stock by age bucket (days since purchased_at)."""
+    where = ["sb.business_id = :biz", "sb.remaining_qty > 0", "sb.is_expired = FALSE"]
+    params: dict = {"biz": business_id}
+    if customer_id is not None:
+        where.append("sb.customer_id = :cust"); params["cust"] = customer_id
+
+    query = text(f"""
+        WITH aged AS (
+            SELECT sb.id, sb.product_id, sb.remaining_qty,
+                   GREATEST(EXTRACT(DAY FROM (NOW() - sb.purchased_at))::int, 0) AS age_days,
+                   COALESCE(p.price, 0) AS price
+            FROM stock_batches sb
+            LEFT JOIN products p ON p.id = sb.product_id
+            WHERE {' AND '.join(where)}
+        )
+        SELECT
+            CASE
+                WHEN age_days <= 30 THEN '0-30'
+                WHEN age_days <= 60 THEN '31-60'
+                WHEN age_days <= 90 THEN '61-90'
+                ELSE '90+'
+            END AS bucket,
+            COUNT(DISTINCT product_id)         AS sku_count,
+            COALESCE(SUM(remaining_qty), 0)    AS units,
+            COALESCE(SUM(remaining_qty * price), 0) AS value
+        FROM aged
+        GROUP BY 1
+        ORDER BY CASE bucket
+            WHEN '0-30' THEN 1 WHEN '31-60' THEN 2 WHEN '61-90' THEN 3 ELSE 4 END
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, params).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_expiry_risk(business_id: int, customer_id: int | None,
+                    days_window: int = 30) -> list[dict]:
+    """Batches expiring within `days_window` days, sorted by ₹ at risk."""
+    where = ["sb.business_id = :biz", "sb.remaining_qty > 0",
+             "sb.is_expired = FALSE", "sb.expires_at IS NOT NULL",
+             "sb.expires_at <= (CURRENT_DATE + (:dw || ' days')::interval)::date"]
+    params: dict = {"biz": business_id, "dw": str(int(days_window))}
+    if customer_id is not None:
+        where.append("sb.customer_id = :cust"); params["cust"] = customer_id
+
+    query = text(f"""
+        SELECT sb.id AS batch_id, sb.product_id, p.name AS product_name,
+               p.sku_code, sb.remaining_qty,
+               sb.purchased_at, sb.expires_at,
+               (sb.expires_at - CURRENT_DATE) AS days_to_expiry,
+               COALESCE(p.price, 0) AS price,
+               COALESCE(sb.remaining_qty * p.price, 0) AS value_at_risk
+        FROM stock_batches sb
+        LEFT JOIN products p ON p.id = sb.product_id
+        WHERE {' AND '.join(where)}
+        ORDER BY sb.remaining_qty * COALESCE(p.price, 0) DESC, sb.expires_at
+        LIMIT 100
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, params).mappings().all()
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        d["purchased_at"] = str(d["purchased_at"])
+        d["expires_at"] = str(d["expires_at"]) if d["expires_at"] else None
+        out.append(d)
+    return out
+
+
+def get_complete_analysis(
+    product_id: int, business_id: int, customer_id: int | None,
+    days: int = 90,
+) -> dict:
+    """Full-funnel single-SKU report: inbound + outbound + economics."""
+    where_p = ["id = :pid", "business_id = :biz"]
+    params: dict = {"pid": product_id, "biz": business_id}
+    if customer_id is not None:
+        where_p.append("customer_id = :cust"); params["cust"] = customer_id
+    with engine.connect() as conn:
+        prod = conn.execute(text(f"""
+            SELECT id, name, sku_code, customer_id, warehouse_id,
+                   stock_at_warehouse, price, lead_time_days,
+                   reorder_point, safety_stock, max_stock_level, expiry_days
+            FROM products WHERE {' AND '.join(where_p)}
+        """), params).mappings().fetchone()
+        if not prod:
+            return {}
+        prod = dict(prod)
+
+        # Inbound timeline
+        inbounds = [dict(r) for r in conn.execute(text("""
+            SELECT il.id, oo.grn_number, il.received_qty, il.unit_cost, il.line_amount,
+                   il.expires_at, il.batch_code, oo.received_at
+            FROM inbound_lines il
+            JOIN inbound_orders oo ON oo.id = il.inbound_id
+            WHERE il.product_id = :pid AND oo.business_id = :biz
+              AND oo.status = 'received'
+              AND oo.received_at >= NOW() - (:d || ' days')::interval
+            ORDER BY oo.received_at DESC
+            LIMIT 200
+        """), {"pid": product_id, "biz": business_id, "d": str(days)}).mappings().all()]
+        for ib in inbounds:
+            ib["received_at"] = str(ib["received_at"])
+            ib["expires_at"] = str(ib["expires_at"]) if ib["expires_at"] else None
+
+        # Outbound timeline
+        outbounds = [dict(r) for r in conn.execute(text("""
+            SELECT ol.id, oo.shipment_number, ol.picked_qty, ol.unit_price,
+                   ol.line_amount, ol.avg_cogs, oo.shipped_at
+            FROM outbound_lines ol
+            JOIN outbound_orders oo ON oo.id = ol.outbound_id
+            WHERE ol.product_id = :pid AND oo.business_id = :biz
+              AND oo.status = 'shipped'
+              AND oo.shipped_at >= NOW() - (:d || ' days')::interval
+            ORDER BY oo.shipped_at DESC
+            LIMIT 200
+        """), {"pid": product_id, "biz": business_id, "d": str(days)}).mappings().all()]
+        for ob in outbounds:
+            ob["shipped_at"] = str(ob["shipped_at"])
+
+        # Daily stock curve from ledger
+        ledger = [dict(r) for r in conn.execute(text("""
+            SELECT DATE(transaction_at) AS date,
+                   SUM(stock_adjusted)::int AS net_change
+            FROM inventory_transactions
+            WHERE product_id = :pid AND business_id = :biz
+              AND transaction_at >= NOW() - (:d || ' days')::interval
+            GROUP BY DATE(transaction_at)
+            ORDER BY date
+        """), {"pid": product_id, "biz": business_id, "d": str(days)}).mappings().all()]
+        for r in ledger:
+            r["date"] = str(r["date"])
+
+        # Economics aggregates
+        econ = conn.execute(text("""
+            SELECT
+                COALESCE(SUM(ol.line_amount), 0)                      AS revenue,
+                COALESCE(SUM(ol.picked_qty * ol.avg_cogs), 0)         AS cogs,
+                COALESCE(SUM(ol.picked_qty), 0)                       AS units_sold,
+                COUNT(DISTINCT oo.id)                                 AS shipments
+            FROM outbound_lines ol
+            JOIN outbound_orders oo ON oo.id = ol.outbound_id
+            WHERE ol.product_id = :pid AND oo.business_id = :biz
+              AND oo.status = 'shipped'
+              AND oo.shipped_at >= NOW() - (:d || ' days')::interval
+        """), {"pid": product_id, "biz": business_id, "d": str(days)}).mappings().fetchone()
+        econ = dict(econ) if econ else {}
+
+    revenue = float(econ.get("revenue") or 0)
+    cogs = float(econ.get("cogs") or 0)
+    units_sold = int(econ.get("units_sold") or 0)
+    gross_margin = revenue - cogs
+    gross_margin_pct = (gross_margin / revenue * 100.0) if revenue > 0 else None
+    avg_daily = (units_sold / max(1, days))
+    dio = ((prod["stock_at_warehouse"] or 0) / avg_daily) if avg_daily > 0 else None
+    inv_turns = (365.0 / dio) if dio and dio > 0 else None
+
+    return {
+        "product": prod,
+        "inbounds": inbounds,
+        "outbounds": outbounds,
+        "ledger": ledger,
+        "economics": {
+            "revenue": round(revenue, 2),
+            "cogs": round(cogs, 2),
+            "gross_margin": round(gross_margin, 2),
+            "gross_margin_pct": round(gross_margin_pct, 2) if gross_margin_pct is not None else None,
+            "units_sold": units_sold,
+            "shipments": int(econ.get("shipments") or 0),
+            "avg_daily_outbound": round(avg_daily, 2),
+            "days_inventory_outstanding": round(dio, 1) if dio else None,
+            "inventory_turns": round(inv_turns, 2) if inv_turns else None,
+            "window_days": days,
+        },
+    }
+
+
+def get_behavior_analysis(
+    business_id: int, customer_id: int | None, days: int = 90,
+) -> dict:
+    """ABC × XYZ matrix + lifecycle classification."""
+    where = ["oo.business_id = :biz", "oo.status = 'shipped'",
+             "oo.shipped_at >= NOW() - (:d || ' days')::interval"]
+    params: dict = {"biz": business_id, "d": str(days)}
+    if customer_id is not None:
+        where.append("oo.customer_id = :cust"); params["cust"] = customer_id
+
+    where_sql = " AND ".join(where)
+    query = text(f"""
+        WITH per_product AS (
+            SELECT p.id AS product_id, p.name, p.sku_code, p.customer_id,
+                   COALESCE(SUM(ol.line_amount), 0)               AS revenue,
+                   COALESCE(SUM(ol.picked_qty), 0)                AS units_sold,
+                   COUNT(DISTINCT DATE(oo.shipped_at))            AS active_days
+            FROM products p
+            LEFT JOIN outbound_lines ol ON ol.product_id = p.id
+            LEFT JOIN outbound_orders oo ON oo.id = ol.outbound_id AND {where_sql}
+            WHERE p.business_id = :biz
+              {"AND p.customer_id = :cust" if customer_id is not None else ""}
+            GROUP BY p.id, p.name, p.sku_code, p.customer_id
+        ),
+        per_product_daily AS (
+            SELECT ol.product_id, DATE(oo.shipped_at) AS day,
+                   SUM(ol.picked_qty) AS qty
+            FROM outbound_lines ol
+            JOIN outbound_orders oo ON oo.id = ol.outbound_id AND {where_sql}
+            GROUP BY ol.product_id, DATE(oo.shipped_at)
+        ),
+        per_product_cv AS (
+            SELECT product_id,
+                   AVG(qty)::float                          AS mean_qty,
+                   COALESCE(STDDEV_POP(qty), 0)::float      AS std_qty,
+                   COUNT(*)                                 AS active_days
+            FROM per_product_daily
+            GROUP BY product_id
+        )
+        SELECT pp.product_id, pp.name, pp.sku_code, pp.customer_id,
+               pp.revenue, pp.units_sold, pp.active_days,
+               COALESCE(cv.mean_qty, 0)  AS mean_qty,
+               COALESCE(cv.std_qty, 0)   AS std_qty
+        FROM per_product pp
+        LEFT JOIN per_product_cv cv ON cv.product_id = pp.product_id
+        ORDER BY pp.revenue DESC
+    """)
+    with engine.connect() as conn:
+        rows = [dict(r) for r in conn.execute(query, params).mappings().all()]
+
+    # ABC: cumulative revenue → A=top 80%, B=next 15%, C=last 5%
+    total_rev = sum(float(r["revenue"]) for r in rows) or 1.0
+    cum = 0.0
+    for r in rows:
+        cum += float(r["revenue"])
+        share = cum / total_rev
+        r["revenue"] = round(float(r["revenue"]), 2)
+        r["units_sold"] = int(r["units_sold"] or 0)
+        r["mean_qty"] = round(float(r["mean_qty"] or 0), 2)
+        r["std_qty"] = round(float(r["std_qty"] or 0), 2)
+        r["abc_class"] = "A" if share <= 0.80 else ("B" if share <= 0.95 else "C")
+        # XYZ: CV thresholds 0.5 / 1.0
+        cv = (r["std_qty"] / r["mean_qty"]) if r["mean_qty"] > 0 else 99.0
+        r["cv"] = round(cv, 3)
+        if cv <= 0.5:
+            r["xyz_class"] = "X"
+        elif cv <= 1.0:
+            r["xyz_class"] = "Y"
+        else:
+            r["xyz_class"] = "Z"
+        # Lifecycle by activity
+        if r["active_days"] == 0:
+            r["lifecycle"] = "Dormant"
+        elif r["active_days"] < 7:
+            r["lifecycle"] = "New"
+        else:
+            r["lifecycle"] = "Active"
+
+    # Build the 3×3 matrix counts
+    matrix: dict[str, dict[str, int]] = {
+        a: {x: 0 for x in ("X", "Y", "Z")} for a in ("A", "B", "C")
+    }
+    for r in rows:
+        matrix[r["abc_class"]][r["xyz_class"]] += 1
+
+    return {
+        "products": rows,
+        "matrix": matrix,
+        "total_revenue": round(total_rev, 2),
+        "window_days": days,
+    }
+
+
+# ============================================================================
+# Tenant-aware dashboard aggregates (Phase 4)
+# ============================================================================
+
+def get_customer_breakdown_stats(business_id: int) -> list[dict]:
+    """One row per customer with key KPIs for the warehouse-admin dashboard."""
+    query = text("""
+        WITH customer_stock AS (
+            SELECT customer_id,
+                   COUNT(*)                         AS sku_count,
+                   COALESCE(SUM(stock_at_warehouse), 0) AS total_units,
+                   COALESCE(SUM(stock_at_warehouse * price), 0) AS stock_value,
+                   COUNT(*) FILTER (
+                       WHERE stock_at_warehouse <= COALESCE(reorder_point, 0)
+                         AND stock_at_warehouse > 0
+                   ) AS low_stock_count,
+                   COUNT(*) FILTER (WHERE stock_at_warehouse = 0) AS out_of_stock_count
+            FROM products
+            WHERE business_id = :biz
+            GROUP BY customer_id
+        ),
+        today_inbound AS (
+            SELECT customer_id,
+                   COALESCE(SUM(stock_adjusted), 0) AS qty,
+                   COUNT(*) FILTER (WHERE reason = 'stock_in') AS rows
+            FROM inventory_transactions
+            WHERE business_id = :biz
+              AND stock_adjusted > 0
+              AND DATE(transaction_at) = CURRENT_DATE
+            GROUP BY customer_id
+        ),
+        today_outbound AS (
+            SELECT customer_id,
+                   COALESCE(SUM(ABS(stock_adjusted)), 0) AS qty,
+                   COUNT(*) FILTER (WHERE reason = 'stock_out') AS rows
+            FROM inventory_transactions
+            WHERE business_id = :biz
+              AND stock_adjusted < 0
+              AND DATE(transaction_at) = CURRENT_DATE
+            GROUP BY customer_id
+        )
+        SELECT
+            c.id   AS customer_id,
+            c.name AS customer_name,
+            c.code AS customer_code,
+            c.is_active,
+            COALESCE(cs.sku_count, 0)         AS sku_count,
+            COALESCE(cs.total_units, 0)       AS total_units,
+            COALESCE(cs.stock_value, 0)       AS stock_value,
+            COALESCE(cs.low_stock_count, 0)   AS low_stock_count,
+            COALESCE(cs.out_of_stock_count, 0) AS out_of_stock_count,
+            COALESCE(ti.qty, 0)               AS today_inbound_qty,
+            COALESCE(to_.qty, 0)              AS today_outbound_qty
+        FROM customers c
+        LEFT JOIN customer_stock cs   ON cs.customer_id = c.id
+        LEFT JOIN today_inbound  ti   ON ti.customer_id = c.id
+        LEFT JOIN today_outbound to_  ON to_.customer_id = c.id
+        WHERE c.business_id = :biz
+        ORDER BY cs.stock_value DESC NULLS LAST, c.name
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_warehouse_dashboard_stats(business_id: int) -> dict:
+    """Top-line stats across all customers."""
+    query = text("""
+        SELECT
+            (SELECT COUNT(*) FROM customers WHERE business_id = :biz)                AS total_customers,
+            (SELECT COUNT(*) FROM customers WHERE business_id = :biz AND is_active)  AS active_customers,
+            (SELECT COUNT(*) FROM warehouses WHERE business_id = :biz AND is_active) AS active_warehouses,
+            (SELECT COUNT(*) FROM products WHERE business_id = :biz)                 AS total_skus,
+            (SELECT COALESCE(SUM(stock_at_warehouse), 0) FROM products WHERE business_id = :biz) AS total_units,
+            (SELECT COALESCE(SUM(stock_at_warehouse * price), 0) FROM products WHERE business_id = :biz) AS total_stock_value,
+            (SELECT COALESCE(SUM(stock_adjusted), 0) FROM inventory_transactions
+                WHERE business_id = :biz AND stock_adjusted > 0 AND DATE(transaction_at) = CURRENT_DATE) AS today_inbound_qty,
+            (SELECT COALESCE(SUM(ABS(stock_adjusted)), 0) FROM inventory_transactions
+                WHERE business_id = :biz AND stock_adjusted < 0 AND DATE(transaction_at) = CURRENT_DATE) AS today_outbound_qty,
+            (SELECT COUNT(*) FROM inbound_orders WHERE business_id = :biz AND status = 'draft') AS pending_inbounds,
+            (SELECT COUNT(*) FROM outbound_orders WHERE business_id = :biz AND status = 'draft') AS pending_outbounds
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"biz": business_id}).mappings().fetchone()
+    return dict(row) if row else {}
+
+
+def get_customer_dashboard_stats(business_id: int, customer_id: int) -> dict:
+    """KPIs for a single customer's dashboard."""
+    query = text("""
+        SELECT
+            (SELECT COUNT(*) FROM products WHERE business_id = :biz AND customer_id = :cust) AS sku_count,
+            (SELECT COALESCE(SUM(stock_at_warehouse), 0) FROM products
+                WHERE business_id = :biz AND customer_id = :cust)                              AS total_units,
+            (SELECT COALESCE(SUM(stock_at_warehouse * price), 0) FROM products
+                WHERE business_id = :biz AND customer_id = :cust)                              AS stock_value,
+            (SELECT COUNT(*) FROM products
+                WHERE business_id = :biz AND customer_id = :cust
+                  AND stock_at_warehouse <= COALESCE(reorder_point, 0)
+                  AND stock_at_warehouse > 0)                                                  AS low_stock_count,
+            (SELECT COUNT(*) FROM products
+                WHERE business_id = :biz AND customer_id = :cust AND stock_at_warehouse = 0)   AS out_of_stock_count,
+            (SELECT COALESCE(SUM(stock_adjusted), 0) FROM inventory_transactions
+                WHERE business_id = :biz AND customer_id = :cust
+                  AND stock_adjusted > 0
+                  AND transaction_at >= DATE_TRUNC('month', CURRENT_DATE))                     AS mtd_inbound_qty,
+            (SELECT COALESCE(SUM(ABS(stock_adjusted)), 0) FROM inventory_transactions
+                WHERE business_id = :biz AND customer_id = :cust
+                  AND stock_adjusted < 0
+                  AND transaction_at >= DATE_TRUNC('month', CURRENT_DATE))                     AS mtd_outbound_qty,
+            (SELECT COUNT(*) FROM inbound_orders
+                WHERE business_id = :biz AND customer_id = :cust AND status = 'draft')         AS pending_inbounds,
+            (SELECT COUNT(*) FROM outbound_orders
+                WHERE business_id = :biz AND customer_id = :cust AND status = 'draft')         AS pending_outbounds
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"biz": business_id, "cust": customer_id}).mappings().fetchone()
+    return dict(row) if row else {}
+
+
+def get_outbound_trend_daily(
+    business_id: int, customer_id: int | None, days: int = 90,
+) -> list[dict]:
+    """Daily outbound qty for the last N days. Used for the trend chart."""
+    where = ["business_id = :biz", "stock_adjusted < 0",
+             "transaction_at >= NOW() - (:d || ' days')::interval"]
+    params: dict = {"biz": business_id, "d": str(int(days))}
+    if customer_id is not None:
+        where.append("customer_id = :cust"); params["cust"] = customer_id
+    query = text(f"""
+        SELECT DATE(transaction_at) AS date,
+               COALESCE(SUM(ABS(stock_adjusted)), 0) AS qty
+        FROM inventory_transactions
+        WHERE {' AND '.join(where)}
+        GROUP BY DATE(transaction_at)
+        ORDER BY date
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, params).mappings().all()
+    return [{"date": str(r["date"]), "qty": int(r["qty"])} for r in rows]
+
+
+def get_reorder_now_list(business_id: int, customer_id: int | None) -> list[dict]:
+    """Products whose stock is at or below their reorder_point."""
+    where = ["business_id = :biz",
+             "reorder_point > 0", "stock_at_warehouse <= reorder_point"]
+    params: dict = {"biz": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :cust"); params["cust"] = customer_id
+    query = text(f"""
+        SELECT id AS product_id, customer_id, name, sku_code,
+               stock_at_warehouse, reorder_point, max_stock_level,
+               lead_time_days, safety_stock,
+               GREATEST(COALESCE(max_stock_level, 0) - stock_at_warehouse, 0) AS suggested_qty
+        FROM products
+        WHERE {' AND '.join(where)}
+        ORDER BY (stock_at_warehouse::float / NULLIF(reorder_point, 0)) ASC NULLS LAST,
+                 name
+        LIMIT 50
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, params).mappings().all()
+    return [dict(r) for r in rows]
+
+
+# ============================================================================
+# WMS 2.0 v6 — Suppliers, Buyers, Inbound (GRN), Outbound (Shipment)
+# ============================================================================
+
+# ── Suppliers ───────────────────────────────────────────────────────────────
+
+SUPPLIER_COLUMNS = (
+    "id, business_id, customer_id, name, gstin, contact_name, contact_email, "
+    "contact_phone, address, is_active, created_at"
+)
+
+
+def list_suppliers(business_id: int, customer_id: int) -> list[dict]:
+    query = text(f"""
+        SELECT {SUPPLIER_COLUMNS} FROM suppliers
+        WHERE business_id = :biz AND customer_id = :cust AND is_active = TRUE
+        ORDER BY name
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id, "cust": customer_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def create_supplier(*, business_id: int, customer_id: int, name: str,
+                    gstin: str = "", contact_name: str = "",
+                    contact_email: str = "", contact_phone: str = "",
+                    address: str = "") -> dict:
+    query = text(f"""
+        INSERT INTO suppliers (business_id, customer_id, name, gstin,
+                               contact_name, contact_email, contact_phone, address)
+        VALUES (:biz, :cust, :n, :g, :cn, :ce, :cp, :a)
+        RETURNING {SUPPLIER_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "biz": business_id, "cust": customer_id, "n": name, "g": gstin,
+            "cn": contact_name, "ce": contact_email, "cp": contact_phone, "a": address,
+        }).mappings().first()
+    return dict(row)
+
+
+# ── Buyers ──────────────────────────────────────────────────────────────────
+
+BUYER_COLUMNS = (
+    "id, business_id, customer_id, name, gstin, delivery_location_id, "
+    "contact_name, contact_phone, is_active, created_at"
+)
+
+
+def list_buyers(business_id: int, customer_id: int) -> list[dict]:
+    query = text(f"""
+        SELECT {BUYER_COLUMNS} FROM buyers
+        WHERE business_id = :biz AND customer_id = :cust AND is_active = TRUE
+        ORDER BY name
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id, "cust": customer_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def create_buyer(*, business_id: int, customer_id: int, name: str,
+                 gstin: str = "", delivery_location_id: int | None = None,
+                 contact_name: str = "", contact_phone: str = "") -> dict:
+    query = text(f"""
+        INSERT INTO buyers (business_id, customer_id, name, gstin,
+                            delivery_location_id, contact_name, contact_phone)
+        VALUES (:biz, :cust, :n, :g, :dl, :cn, :cp)
+        RETURNING {BUYER_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "biz": business_id, "cust": customer_id, "n": name, "g": gstin,
+            "dl": delivery_location_id, "cn": contact_name, "cp": contact_phone,
+        }).mappings().first()
+    return dict(row)
+
+
+# ── Inbound orders (GRN) ────────────────────────────────────────────────────
+
+INBOUND_ORDER_COLUMNS = (
+    "id, business_id, customer_id, warehouse_id, supplier_id, grn_number, "
+    "po_number, invoice_number, invoice_date, received_at, status, "
+    "total_qty, total_amount, tax_amount, notes, created_by, created_at, updated_at"
+)
+
+
+def _next_grn_number(conn, business_id: int, customer_id: int) -> str:
+    """Generate the next sequential GRN number for a (business, customer)."""
+    n = conn.execute(text("""
+        SELECT COUNT(*) FROM inbound_orders
+        WHERE business_id = :b AND customer_id = :c
+    """), {"b": business_id, "c": customer_id}).scalar() or 0
+    return f"GRN{n + 1:06d}"
+
+
+def create_inbound_order(
+    *, business_id: int, customer_id: int, warehouse_id: int,
+    created_by: int, supplier_id: int | None,
+    po_number: str, invoice_number: str, invoice_date: str | None,
+    received_at: str | None, notes: str,
+    lines: list[dict],
+) -> dict:
+    """Create a draft inbound (GRN) with line items.
+
+    `lines` items: {product_id, expected_qty, unit_cost, tax_pct, discount_pct,
+                    batch_code, manufactured_at, expires_at, notes}
+    """
+    if not lines:
+        raise ValueError("At least one line item is required")
+    with engine.begin() as conn:
+        grn = _next_grn_number(conn, business_id, customer_id)
+        total_qty = sum(int(l["expected_qty"]) for l in lines)
+        total_amount = sum(
+            int(l["expected_qty"]) * float(l.get("unit_cost", 0)) for l in lines
+        )
+        head = conn.execute(text(f"""
+            INSERT INTO inbound_orders
+                (business_id, customer_id, warehouse_id, supplier_id, grn_number,
+                 po_number, invoice_number, invoice_date, received_at,
+                 total_qty, total_amount, notes, created_by)
+            VALUES
+                (:biz, :cust, :wh, :sup, :grn, :po, :inv, :idate,
+                 COALESCE(:rcv::timestamptz, NOW()),
+                 :tq, :ta, :n, :uid)
+            RETURNING {INBOUND_ORDER_COLUMNS}
+        """), {
+            "biz": business_id, "cust": customer_id, "wh": warehouse_id,
+            "sup": supplier_id, "grn": grn,
+            "po": po_number, "inv": invoice_number, "idate": invoice_date,
+            "rcv": received_at,
+            "tq": total_qty, "ta": total_amount, "n": notes, "uid": created_by,
+        }).mappings().first()
+
+        head_d = dict(head)
+        line_rows: list[dict] = []
+        for ln in lines:
+            qty = int(ln["expected_qty"])
+            unit_cost = float(ln.get("unit_cost", 0))
+            line_amount = qty * unit_cost
+            row = conn.execute(text("""
+                INSERT INTO inbound_lines
+                    (inbound_id, product_id, expected_qty, unit_cost, line_amount,
+                     tax_pct, discount_pct, batch_code, manufactured_at, expires_at, notes)
+                VALUES
+                    (:iid, :pid, :eq, :uc, :la, :tp, :dp, :bc,
+                     :mfg::date, :exp::date, :n)
+                RETURNING id, product_id, expected_qty, received_qty, rejected_qty,
+                          unit_cost, line_amount, tax_pct, discount_pct,
+                          batch_code, manufactured_at, expires_at, notes
+            """), {
+                "iid": head_d["id"], "pid": int(ln["product_id"]),
+                "eq": qty, "uc": unit_cost, "la": line_amount,
+                "tp": float(ln.get("tax_pct", 0)),
+                "dp": float(ln.get("discount_pct", 0)),
+                "bc": ln.get("batch_code", ""),
+                "mfg": ln.get("manufactured_at"),
+                "exp": ln.get("expires_at"),
+                "n": ln.get("notes", ""),
+            }).mappings().first()
+            line_rows.append(dict(row))
+
+    head_d["lines"] = line_rows
+    return head_d
+
+
+def list_inbound_orders(
+    business_id: int, customer_id: int | None,
+    warehouse_id: int | None = None, status_filter: str | None = None,
+    page: int = 1, per_page: int = 20,
+) -> dict:
+    where = ["business_id = :biz"]
+    params: dict = {"biz": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :cust"); params["cust"] = customer_id
+    if warehouse_id is not None:
+        where.append("warehouse_id = :wh"); params["wh"] = warehouse_id
+    if status_filter:
+        where.append("status = :st"); params["st"] = status_filter
+
+    where_sql = " AND ".join(where)
+    offset = (page - 1) * per_page
+
+    with engine.connect() as conn:
+        total = conn.execute(
+            text(f"SELECT COUNT(*) FROM inbound_orders WHERE {where_sql}"), params
+        ).scalar()
+        rows = conn.execute(text(f"""
+            SELECT io.*, c.name AS customer_name, c.code AS customer_code
+            FROM inbound_orders io
+            LEFT JOIN customers c ON c.id = io.customer_id
+            WHERE {where_sql}
+            ORDER BY io.received_at DESC
+            LIMIT :limit OFFSET :offset
+        """), {**params, "limit": per_page, "offset": offset}).mappings().all()
+
+    return {
+        "items": [dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page if total else 0,
+    }
+
+
+def get_inbound_order(inbound_id: int, business_id: int,
+                      customer_id: int | None) -> dict | None:
+    where = ["id = :id", "business_id = :biz"]
+    params: dict = {"id": inbound_id, "biz": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :cust"); params["cust"] = customer_id
+    with engine.connect() as conn:
+        head = conn.execute(text(f"""
+            SELECT {INBOUND_ORDER_COLUMNS}
+            FROM inbound_orders WHERE {' AND '.join(where)}
+        """), params).mappings().fetchone()
+        if not head:
+            return None
+        lines = conn.execute(text("""
+            SELECT id, product_id, expected_qty, received_qty, rejected_qty,
+                   unit_cost, line_amount, tax_pct, discount_pct, batch_code,
+                   manufactured_at, expires_at, stock_batch_id, transaction_id, notes
+            FROM inbound_lines WHERE inbound_id = :iid
+            ORDER BY id
+        """), {"iid": inbound_id}).mappings().all()
+    head_d = dict(head)
+    head_d["lines"] = [dict(l) for l in lines]
+    return head_d
+
+
+def receive_inbound_order(inbound_id: int, business_id: int,
+                          customer_id: int | None) -> dict:
+    """Commit an inbound: write stock_batches, ledger rows, and update product stock.
+
+    Idempotent guard: refuses if status != 'draft'.
+    """
+    with engine.begin() as conn:
+        head_q = "SELECT * FROM inbound_orders WHERE id = :id AND business_id = :biz"
+        params: dict = {"id": inbound_id, "biz": business_id}
+        if customer_id is not None:
+            head_q += " AND customer_id = :cust"
+            params["cust"] = customer_id
+        head = conn.execute(text(head_q), params).mappings().fetchone()
+        if not head:
+            raise ValueError("Inbound not found")
+        if head["status"] != "draft":
+            raise ValueError(f"Inbound is not in 'draft' state (current: {head['status']})")
+
+        lines = conn.execute(text("""
+            SELECT * FROM inbound_lines WHERE inbound_id = :iid ORDER BY id
+        """), {"iid": inbound_id}).mappings().all()
+
+        for ln in lines:
+            qty = int(ln["expected_qty"])  # for now received_qty == expected_qty
+            if qty <= 0:
+                continue
+
+            # 1. previous + current stock — read product, update
+            prev = conn.execute(text("""
+                SELECT stock_at_warehouse FROM products WHERE id = :pid
+            """), {"pid": ln["product_id"]}).scalar() or 0
+            current = prev + qty
+            conn.execute(text("""
+                UPDATE products SET stock_at_warehouse = :s, updated_at = NOW()
+                WHERE id = :pid
+            """), {"s": current, "pid": ln["product_id"]})
+
+            # 2. inventory_transactions ledger entry
+            tx_row = conn.execute(text("""
+                INSERT INTO inventory_transactions
+                    (product_id, business_id, customer_id, warehouse_id, created_by,
+                     stock_adjusted, previous_stock, current_stock,
+                     transaction_at, reference_no, reason)
+                VALUES
+                    (:pid, :biz, :cust, :wh, :uid,
+                     :adj, :prev, :curr,
+                     COALESCE(:tat::timestamptz, NOW()), :ref, 'stock_in')
+                RETURNING id
+            """), {
+                "pid": ln["product_id"], "biz": business_id,
+                "cust": head["customer_id"], "wh": head["warehouse_id"],
+                "uid": head["created_by"],
+                "adj": qty, "prev": prev, "curr": current,
+                "tat": head["received_at"],
+                "ref": head["grn_number"],
+            }).mappings().first()
+            tx_id = tx_row["id"]
+
+            # 3. stock_batches row (with FEFO-relevant expires_at)
+            sb_row = conn.execute(text("""
+                INSERT INTO stock_batches
+                    (product_id, business_id, customer_id, warehouse_id,
+                     quantity, remaining_qty, purchased_at, expires_at, transaction_id)
+                VALUES
+                    (:pid, :biz, :cust, :wh,
+                     :qty, :qty, COALESCE(:pat::timestamptz, NOW()), :exp::date, :tx)
+                RETURNING id
+            """), {
+                "pid": ln["product_id"], "biz": business_id,
+                "cust": head["customer_id"], "wh": head["warehouse_id"],
+                "qty": qty,
+                "pat": head["received_at"], "exp": ln["expires_at"], "tx": tx_id,
+            }).mappings().first()
+            sb_id = sb_row["id"]
+
+            # 4. wire back into the line
+            conn.execute(text("""
+                UPDATE inbound_lines
+                SET received_qty = :rq, stock_batch_id = :sb, transaction_id = :tx
+                WHERE id = :id
+            """), {
+                "rq": qty, "sb": sb_id, "tx": tx_id, "id": ln["id"],
+            })
+
+        # 5. flip status
+        conn.execute(text("""
+            UPDATE inbound_orders SET status = 'received', updated_at = NOW()
+            WHERE id = :id
+        """), {"id": inbound_id})
+
+    return get_inbound_order(inbound_id, business_id, customer_id) or {}
+
+
+# ── Outbound orders (Shipment) ─────────────────────────────────────────────
+
+OUTBOUND_ORDER_COLUMNS = (
+    "id, business_id, customer_id, warehouse_id, buyer_id, delivery_location_id, "
+    "shipment_number, so_number, invoice_number, invoice_date, shipped_at, "
+    "status, pick_strategy, total_qty, total_amount, tax_amount, notes, "
+    "created_by, created_at, updated_at"
+)
+
+
+def _next_shipment_number(conn, business_id: int, customer_id: int) -> str:
+    n = conn.execute(text("""
+        SELECT COUNT(*) FROM outbound_orders
+        WHERE business_id = :b AND customer_id = :c
+    """), {"b": business_id, "c": customer_id}).scalar() or 0
+    return f"SHP{n + 1:06d}"
+
+
+def create_outbound_order(
+    *, business_id: int, customer_id: int, warehouse_id: int,
+    created_by: int, buyer_id: int | None, delivery_location_id: int | None,
+    so_number: str, invoice_number: str, invoice_date: str | None,
+    shipped_at: str | None, pick_strategy: str, notes: str,
+    lines: list[dict],
+) -> dict:
+    """Create a draft outbound (shipment).
+
+    `lines` items: {product_id, requested_qty, unit_price, tax_pct, discount_pct, notes}
+    """
+    if pick_strategy not in ("FIFO", "FEFO", "manual"):
+        raise ValueError("pick_strategy must be FIFO, FEFO, or manual")
+    if not lines:
+        raise ValueError("At least one line item is required")
+
+    with engine.begin() as conn:
+        ship = _next_shipment_number(conn, business_id, customer_id)
+        total_qty = sum(int(l["requested_qty"]) for l in lines)
+        total_amount = sum(
+            int(l["requested_qty"]) * float(l.get("unit_price", 0)) for l in lines
+        )
+        head = conn.execute(text(f"""
+            INSERT INTO outbound_orders
+                (business_id, customer_id, warehouse_id, buyer_id, delivery_location_id,
+                 shipment_number, so_number, invoice_number, invoice_date, shipped_at,
+                 pick_strategy, total_qty, total_amount, notes, created_by)
+            VALUES
+                (:biz, :cust, :wh, :buyer, :dl,
+                 :sh, :so, :inv, :idate, COALESCE(:sat::timestamptz, NOW()),
+                 :strat, :tq, :ta, :n, :uid)
+            RETURNING {OUTBOUND_ORDER_COLUMNS}
+        """), {
+            "biz": business_id, "cust": customer_id, "wh": warehouse_id,
+            "buyer": buyer_id, "dl": delivery_location_id,
+            "sh": ship, "so": so_number, "inv": invoice_number, "idate": invoice_date,
+            "sat": shipped_at, "strat": pick_strategy,
+            "tq": total_qty, "ta": total_amount, "n": notes, "uid": created_by,
+        }).mappings().first()
+        head_d = dict(head)
+        line_rows = []
+        for ln in lines:
+            qty = int(ln["requested_qty"])
+            unit_price = float(ln.get("unit_price", 0))
+            row = conn.execute(text("""
+                INSERT INTO outbound_lines
+                    (outbound_id, product_id, requested_qty, unit_price, line_amount,
+                     tax_pct, discount_pct, notes)
+                VALUES (:oid, :pid, :rq, :up, :la, :tp, :dp, :n)
+                RETURNING id, product_id, requested_qty, picked_qty, unit_price,
+                          line_amount, tax_pct, discount_pct, avg_cogs, notes
+            """), {
+                "oid": head_d["id"], "pid": int(ln["product_id"]),
+                "rq": qty, "up": unit_price, "la": qty * unit_price,
+                "tp": float(ln.get("tax_pct", 0)),
+                "dp": float(ln.get("discount_pct", 0)),
+                "n": ln.get("notes", ""),
+            }).mappings().first()
+            line_rows.append(dict(row))
+    head_d["lines"] = line_rows
+    return head_d
+
+
+def list_outbound_orders(
+    business_id: int, customer_id: int | None,
+    warehouse_id: int | None = None, status_filter: str | None = None,
+    page: int = 1, per_page: int = 20,
+) -> dict:
+    where = ["business_id = :biz"]
+    params: dict = {"biz": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :cust"); params["cust"] = customer_id
+    if warehouse_id is not None:
+        where.append("warehouse_id = :wh"); params["wh"] = warehouse_id
+    if status_filter:
+        where.append("status = :st"); params["st"] = status_filter
+    where_sql = " AND ".join(where)
+    offset = (page - 1) * per_page
+    with engine.connect() as conn:
+        total = conn.execute(
+            text(f"SELECT COUNT(*) FROM outbound_orders WHERE {where_sql}"), params
+        ).scalar()
+        rows = conn.execute(text(f"""
+            SELECT oo.*, c.name AS customer_name, c.code AS customer_code
+            FROM outbound_orders oo
+            LEFT JOIN customers c ON c.id = oo.customer_id
+            WHERE {where_sql}
+            ORDER BY oo.shipped_at DESC
+            LIMIT :limit OFFSET :offset
+        """), {**params, "limit": per_page, "offset": offset}).mappings().all()
+    return {
+        "items": [dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page if total else 0,
+    }
+
+
+def get_outbound_order(outbound_id: int, business_id: int,
+                       customer_id: int | None) -> dict | None:
+    where = ["id = :id", "business_id = :biz"]
+    params: dict = {"id": outbound_id, "biz": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :cust"); params["cust"] = customer_id
+    with engine.connect() as conn:
+        head = conn.execute(text(f"""
+            SELECT {OUTBOUND_ORDER_COLUMNS}
+            FROM outbound_orders WHERE {' AND '.join(where)}
+        """), params).mappings().fetchone()
+        if not head:
+            return None
+        lines = conn.execute(text("""
+            SELECT id, product_id, requested_qty, picked_qty, unit_price,
+                   line_amount, tax_pct, discount_pct, avg_cogs, notes
+            FROM outbound_lines WHERE outbound_id = :oid
+            ORDER BY id
+        """), {"oid": outbound_id}).mappings().all()
+        line_ids = [int(l["id"]) for l in lines]
+        picks: list[dict] = []
+        if line_ids:
+            picks = [dict(r) for r in conn.execute(text("""
+                SELECT id, outbound_line_id, stock_batch_id, qty, unit_cost, transaction_id
+                FROM outbound_picks
+                WHERE outbound_line_id = ANY(:ids)
+                ORDER BY id
+            """), {"ids": line_ids}).mappings().all()]
+    head_d = dict(head)
+    head_d["lines"] = [dict(l) for l in lines]
+    head_d["picks"] = picks
+    return head_d
+
+
+def _resolve_pick_plan(conn, *, product_id: int, business_id: int,
+                       customer_id: int, warehouse_id: int,
+                       qty: int, strategy: str) -> list[dict]:
+    """Return the list of (stock_batch_id, qty, unit_cost) to consume.
+
+    Raises ValueError if there isn't enough stock.
+    """
+    if strategy == "FEFO":
+        order = "ORDER BY expires_at ASC NULLS LAST, purchased_at ASC, id ASC"
+    else:  # FIFO (and 'manual' falls back to FIFO if no manual plan provided)
+        order = "ORDER BY purchased_at ASC, id ASC"
+
+    rows = conn.execute(text(f"""
+        SELECT sb.id, sb.remaining_qty, sb.expires_at,
+               COALESCE(il.unit_cost, 0) AS unit_cost
+        FROM stock_batches sb
+        LEFT JOIN inbound_lines il ON il.stock_batch_id = sb.id
+        WHERE sb.product_id = :pid
+          AND sb.business_id = :biz
+          AND sb.customer_id = :cust
+          AND sb.warehouse_id = :wh
+          AND sb.remaining_qty > 0
+          AND sb.is_expired = FALSE
+        {order}
+    """), {
+        "pid": product_id, "biz": business_id,
+        "cust": customer_id, "wh": warehouse_id,
+    }).mappings().all()
+
+    plan: list[dict] = []
+    remaining = qty
+    for r in rows:
+        if remaining <= 0:
+            break
+        take = min(remaining, int(r["remaining_qty"]))
+        plan.append({
+            "stock_batch_id": int(r["id"]),
+            "qty": take,
+            "unit_cost": float(r["unit_cost"]),
+        })
+        remaining -= take
+
+    if remaining > 0:
+        raise ValueError(
+            f"Insufficient stock for product {product_id}: need {qty}, "
+            f"available {qty - remaining}"
+        )
+    return plan
+
+
+def preview_outbound_pick_plan(outbound_id: int, business_id: int,
+                               customer_id: int | None) -> dict:
+    """Compute the FIFO/FEFO consumption plan without committing.
+
+    Returns {lines: [{outbound_line_id, product_id, requested_qty, plan: [...]}]}.
+    Raises ValueError if any line can't be fully covered.
+    """
+    head = get_outbound_order(outbound_id, business_id, customer_id)
+    if not head:
+        raise ValueError("Outbound not found")
+    if head["status"] != "draft":
+        raise ValueError(f"Outbound is not draft (current: {head['status']})")
+
+    strategy = head["pick_strategy"]
+    out_cust = head["customer_id"]
+    warehouse_id = head["warehouse_id"]
+
+    with engine.connect() as conn:
+        result_lines = []
+        for ln in head["lines"]:
+            # FEFO is forced for perishable products (expiry_days > 0) when
+            # the outbound is configured for FIFO at header level — only
+            # if user didn't explicitly choose FIFO. We keep the header's
+            # explicit choice as the source of truth.
+            plan = _resolve_pick_plan(
+                conn,
+                product_id=int(ln["product_id"]),
+                business_id=business_id,
+                customer_id=out_cust,
+                warehouse_id=warehouse_id,
+                qty=int(ln["requested_qty"]),
+                strategy=strategy,
+            )
+            result_lines.append({
+                "outbound_line_id": int(ln["id"]),
+                "product_id": int(ln["product_id"]),
+                "requested_qty": int(ln["requested_qty"]),
+                "strategy": strategy,
+                "plan": plan,
+            })
+    return {"outbound_id": outbound_id, "lines": result_lines}
+
+
+def ship_outbound_order(outbound_id: int, business_id: int,
+                        customer_id: int | None) -> dict:
+    """Commit an outbound: consume batches, write picks + ledger, decrement stock."""
+    with engine.begin() as conn:
+        head_q = "SELECT * FROM outbound_orders WHERE id = :id AND business_id = :biz"
+        params: dict = {"id": outbound_id, "biz": business_id}
+        if customer_id is not None:
+            head_q += " AND customer_id = :cust"
+            params["cust"] = customer_id
+        head = conn.execute(text(head_q), params).mappings().fetchone()
+        if not head:
+            raise ValueError("Outbound not found")
+        if head["status"] != "draft":
+            raise ValueError(f"Outbound is not draft (current: {head['status']})")
+
+        lines = conn.execute(text(
+            "SELECT * FROM outbound_lines WHERE outbound_id = :oid ORDER BY id"
+        ), {"oid": outbound_id}).mappings().all()
+
+        for ln in lines:
+            qty = int(ln["requested_qty"])
+            if qty <= 0:
+                continue
+
+            plan = _resolve_pick_plan(
+                conn,
+                product_id=int(ln["product_id"]),
+                business_id=business_id,
+                customer_id=head["customer_id"],
+                warehouse_id=head["warehouse_id"],
+                qty=qty,
+                strategy=head["pick_strategy"],
+            )
+
+            # Ledger row (single tx covering whole line, signed -qty)
+            prev = conn.execute(text("""
+                SELECT stock_at_warehouse FROM products WHERE id = :pid
+            """), {"pid": ln["product_id"]}).scalar() or 0
+            current = prev - qty
+            conn.execute(text("""
+                UPDATE products SET stock_at_warehouse = :s, updated_at = NOW()
+                WHERE id = :pid
+            """), {"s": current, "pid": ln["product_id"]})
+
+            tx_row = conn.execute(text("""
+                INSERT INTO inventory_transactions
+                    (product_id, business_id, customer_id, warehouse_id, created_by,
+                     stock_adjusted, previous_stock, current_stock,
+                     transaction_at, reference_no, reason)
+                VALUES
+                    (:pid, :biz, :cust, :wh, :uid,
+                     :adj, :prev, :curr,
+                     COALESCE(:sat::timestamptz, NOW()), :ref, 'stock_out')
+                RETURNING id
+            """), {
+                "pid": ln["product_id"], "biz": business_id,
+                "cust": head["customer_id"], "wh": head["warehouse_id"],
+                "uid": head["created_by"],
+                "adj": -qty, "prev": prev, "curr": current,
+                "sat": head["shipped_at"], "ref": head["shipment_number"],
+            }).mappings().first()
+            tx_id = tx_row["id"]
+
+            # Decrement batches; record picks
+            total_cost = 0.0
+            total_taken = 0
+            for p in plan:
+                # decrement batch
+                conn.execute(text("""
+                    UPDATE stock_batches
+                    SET remaining_qty = remaining_qty - :q
+                    WHERE id = :sb
+                """), {"q": p["qty"], "sb": p["stock_batch_id"]})
+                # pick row
+                conn.execute(text("""
+                    INSERT INTO outbound_picks
+                        (outbound_line_id, stock_batch_id, qty, unit_cost, transaction_id)
+                    VALUES (:line, :sb, :q, :uc, :tx)
+                """), {
+                    "line": ln["id"], "sb": p["stock_batch_id"],
+                    "q": p["qty"], "uc": p["unit_cost"], "tx": tx_id,
+                })
+                total_cost += p["qty"] * p["unit_cost"]
+                total_taken += p["qty"]
+
+            avg_cogs = (total_cost / total_taken) if total_taken else 0
+            conn.execute(text("""
+                UPDATE outbound_lines SET picked_qty = :pq, avg_cogs = :ac WHERE id = :id
+            """), {"pq": total_taken, "ac": avg_cogs, "id": ln["id"]})
+
+        conn.execute(text("""
+            UPDATE outbound_orders SET status = 'shipped', updated_at = NOW()
+            WHERE id = :id
+        """), {"id": outbound_id})
+
+    return get_outbound_order(outbound_id, business_id, customer_id) or {}

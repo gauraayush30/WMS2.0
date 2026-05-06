@@ -3,10 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { useAuth, API } from "../../context/AuthContext";
 import {
   ArrowLeft, MapPin, Zap, BarChart3, Settings, Plus, Trash2, X,
-  ArrowRightLeft, MoveRight, AlertTriangle, RefreshCw, ChevronRight,
+  ArrowRightLeft, MoveRight, RefreshCw, ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

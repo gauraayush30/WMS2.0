@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth, API } from "../context/AuthContext";
-import { Package, Warehouse, AlertTriangle, TrendingDown, Eye, ClipboardList, ChevronRight, MapPin, Zap } from "lucide-react";
+import { Package, Warehouse, AlertTriangle, TrendingDown, Eye, ClipboardList, ChevronRight, MapPin } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { motion } from "framer-motion";

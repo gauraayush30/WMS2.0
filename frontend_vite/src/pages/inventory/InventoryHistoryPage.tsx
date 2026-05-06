@@ -4,7 +4,6 @@ import { useAuth, API } from "../../context/AuthContext";
 import { ArrowLeft, ArrowUpCircle, ArrowDownCircle, ClipboardList, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -108,12 +107,12 @@ export default function InventoryHistoryPage() {
       <Card>
         <CardContent className="p-4 flex flex-wrap items-center gap-2">
           <Filter size={14} className="text-muted-foreground" />
-          <Select value={filterReason} onChange={(e) => { setFilterReason(e.target.value); setPage(1); }}>
+          <select className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" value={filterReason} onChange={(e) => { setFilterReason(e.target.value); setPage(1); }}>
             <option value="">All Reasons</option>
             {REASON_OPTIONS.map((r) => (
               <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
             ))}
-          </Select>
+          </select>
           <Input type="date" className="w-40" value={startDate} onChange={(e) => { setStartDate(e.target.value); setPage(1); }} />
           <Input type="date" className="w-40" value={endDate} onChange={(e) => { setEndDate(e.target.value); setPage(1); }} />
           {(filterReason || startDate || endDate) && (

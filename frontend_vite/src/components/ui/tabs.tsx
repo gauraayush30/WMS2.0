@@ -1,21 +1,6 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-const Tabs = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement> & {
-    value: string;
-    onValueChange: (v: string) => void;
-  }
->(({ className, value, onValueChange, children, ...props }, ref) => (
-  <TabsContext.Provider value={{ value, onValueChange }}>
-    <div ref={ref} className={cn("", className)} {...props}>
-      {children}
-    </div>
-  </TabsContext.Provider>
-));
-Tabs.displayName = "Tabs";
-
 const TabsContext = React.createContext<{
   value: string;
   onValueChange: (v: string) => void;
@@ -23,6 +8,36 @@ const TabsContext = React.createContext<{
   value: "",
   onValueChange: () => {},
 });
+
+const Tabs = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement> & {
+    value?: string;
+    defaultValue?: string;
+    onValueChange?: (v: string) => void;
+  }
+>(({ className, value, defaultValue, onValueChange, children, ...props }, ref) => {
+  const [internal, setInternal] = React.useState(defaultValue ?? "");
+  const controlled = value !== undefined;
+  const current = controlled ? value : internal;
+
+  const handleChange = React.useCallback(
+    (v: string) => {
+      if (!controlled) setInternal(v);
+      onValueChange?.(v);
+    },
+    [controlled, onValueChange],
+  );
+
+  return (
+    <TabsContext.Provider value={{ value: current, onValueChange: handleChange }}>
+      <div ref={ref} className={cn("", className)} {...props}>
+        {children}
+      </div>
+    </TabsContext.Provider>
+  );
+});
+Tabs.displayName = "Tabs";
 
 const TabsList = React.forwardRef<
   HTMLDivElement,

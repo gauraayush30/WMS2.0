@@ -1,4 +1,12 @@
-import React from "react";
+interface TransactionTabProps {
+  transactionForm: { sku_id: string; transaction_date: string; sales_qty: number; purchase_qty: number };
+  onFormChange: (form: TransactionTabProps['transactionForm']) => void;
+  onSubmit: (e: React.FormEvent) => void;
+  transactionLoading: boolean;
+  transactionMessage: string;
+  transactionError: string;
+  skuInfo: { current_stock: number; sku_name: string; total_records: number } | null;
+}
 
 function TransactionTab({
   transactionForm,
@@ -8,7 +16,7 @@ function TransactionTab({
   transactionMessage,
   transactionError,
   skuInfo,
-}) {
+}: TransactionTabProps) {
   return (
     <div className="transaction-container">
       <div className="transaction-form-box">

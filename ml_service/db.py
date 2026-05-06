@@ -15,16 +15,22 @@ from config import DB_URL
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 
-def get_daily_aggregated_transactions(product_id: int, business_id: int) -> pd.DataFrame:
+def get_daily_aggregated_transactions(
+    product_id: int,
+    business_id: int,
+    customer_id: int | None = None,
+) -> pd.DataFrame:
     """
     Aggregate ``inventory_transactions`` into daily inbound/outbound
-    for a single product.
-
-    Returns a DataFrame with columns:
-        date, inbound_qty, outbound_qty
-    sorted by date ascending.
+    for a single product. Customer-scoped when ``customer_id`` is given.
     """
-    query = text("""
+    where = ["product_id = :product_id", "business_id = :business_id"]
+    params: dict = {"product_id": product_id, "business_id": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :customer_id")
+        params["customer_id"] = customer_id
+
+    query = text(f"""
         SELECT
             DATE(transaction_at)                                          AS date,
             COALESCE(SUM(CASE WHEN stock_adjusted > 0
@@ -32,15 +38,12 @@ def get_daily_aggregated_transactions(product_id: int, business_id: int) -> pd.D
             COALESCE(SUM(CASE WHEN stock_adjusted < 0
                               THEN ABS(stock_adjusted) ELSE 0 END), 0)   AS outbound_qty
         FROM inventory_transactions
-        WHERE product_id = :product_id
-          AND business_id = :business_id
+        WHERE {' AND '.join(where)}
         GROUP BY DATE(transaction_at)
         ORDER BY date
     """)
     with engine.connect() as conn:
-        rows = conn.execute(
-            query, {"product_id": product_id, "business_id": business_id}
-        ).mappings().all()
+        rows = conn.execute(query, params).mappings().all()
 
     if not rows:
         return pd.DataFrame(columns=["date", "inbound_qty", "outbound_qty"])
@@ -52,26 +55,68 @@ def get_daily_aggregated_transactions(product_id: int, business_id: int) -> pd.D
     return df
 
 
-def get_uploaded_history(product_id: int, business_id: int) -> pd.DataFrame:
+def get_customer_outbound_history(
+    business_id: int, customer_id: int, days: int = 365,
+) -> pd.DataFrame:
+    """Cross-product daily outbound for a customer (used for cold-start fallback)."""
+    query = text("""
+        SELECT
+            DATE(transaction_at) AS date,
+            COALESCE(SUM(ABS(stock_adjusted)), 0) AS outbound_qty
+        FROM inventory_transactions
+        WHERE business_id = :biz
+          AND customer_id = :cust
+          AND stock_adjusted < 0
+          AND transaction_at >= NOW() - INTERVAL ':d days'
+        GROUP BY DATE(transaction_at)
+        ORDER BY date
+    """.replace(":d", str(int(days))))
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id, "cust": customer_id}).mappings().all()
+    if not rows:
+        return pd.DataFrame(columns=["date", "outbound_qty"])
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    df["outbound_qty"] = df["outbound_qty"].astype(int)
+    return df
+
+
+def get_product_replenishment_inputs(product_id: int, business_id: int) -> dict:
+    """Per-product config used for replenishment math."""
+    query = text("""
+        SELECT id, name, sku_code, customer_id,
+               stock_at_warehouse, lead_time_days, safety_stock,
+               reorder_point, max_stock_level, par_level, expiry_days
+        FROM products
+        WHERE id = :pid AND business_id = :biz
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"pid": product_id, "biz": business_id}).mappings().fetchone()
+    return dict(row) if row else {}
+
+
+def get_uploaded_history(
+    product_id: int, business_id: int, customer_id: int | None = None,
+) -> pd.DataFrame:
     """
     Fetch CSV-uploaded historical data from ``ml_uploaded_history``.
 
-    Returns a DataFrame with columns:
-        date, inbound_qty, outbound_qty, stock_level
-    sorted by date ascending.
+    Customer-scoped when ``customer_id`` is given.
     """
-    query = text("""
+    where = ["product_id = :product_id", "business_id = :business_id"]
+    params: dict = {"product_id": product_id, "business_id": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :customer_id")
+        params["customer_id"] = customer_id
+    query = text(f"""
         SELECT date, inbound_qty, outbound_qty, stock_level
         FROM ml_uploaded_history
-        WHERE product_id = :product_id
-          AND business_id = :business_id
+        WHERE {' AND '.join(where)}
         ORDER BY date
     """)
     try:
         with engine.connect() as conn:
-            rows = conn.execute(
-                query, {"product_id": product_id, "business_id": business_id}
-            ).mappings().all()
+            rows = conn.execute(query, params).mappings().all()
     except Exception:
         # Table may not exist yet – return empty
         return pd.DataFrame(columns=["date", "inbound_qty", "outbound_qty", "stock_level"])

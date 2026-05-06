@@ -1,14 +1,33 @@
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../context/AuthContext";
 import "./AlertsTab.css";
 
 const API = "http://127.0.0.1:8000";
 
+interface AlertSettings {
+  alerts_enabled: boolean;
+  last_alert_sent: string | null;
+}
+
+interface AtRiskItem {
+  sku_id: string;
+  sku_name: string;
+  current_stock: number;
+  projected_stock: number;
+  demand_during_lead_time: number;
+  reorder_point: number;
+  lead_time_days: number;
+  order_quantity: number;
+  target_stock_level: number;
+  message: string;
+  urgency?: string;
+}
+
 function AlertsTab() {
   const { user, authFetch, logout } = useAuth();
 
-  const [settings, setSettings] = useState(null);
-  const [atRisk, setAtRisk] = useState([]);
+  const [settings, setSettings] = useState<AlertSettings | null>(null);
+  const [atRisk, setAtRisk] = useState<AtRiskItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState(false);
   const [sending, setSending] = useState(false);
@@ -31,8 +50,8 @@ function AlertsTab() {
       setSettings(await settingsRes.json());
       const riskData = await riskRes.json();
       setAtRisk(riskData.at_risk || []);
-    } catch (e) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setLoading(false);
     }
@@ -47,7 +66,7 @@ function AlertsTab() {
     try {
       const res = await authFetch(`${API}/alerts/settings`, {
         method: "POST",
-        body: JSON.stringify({ alerts_enabled: !settings.alerts_enabled }),
+        body: JSON.stringify({ alerts_enabled: !settings?.alerts_enabled }),
       });
       if (!res.ok) throw new Error("Failed to update settings");
       const updated = await res.json();
@@ -57,8 +76,8 @@ function AlertsTab() {
           ? "✓ Email alerts enabled – you'll receive stock alerts every 6 hours."
           : "Alerts disabled."
       );
-    } catch (e) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setToggling(false);
     }
@@ -72,21 +91,21 @@ function AlertsTab() {
       const res = await authFetch(`${API}/alerts/send-now`, { method: "POST" });
       if (!res.ok) throw new Error("Failed to trigger alert");
       setMessage("✓ Alert job triggered – check your inbox shortly.");
-    } catch (e) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setSending(false);
     }
   };
 
-  const urgencyClass = (item) => {
+  const urgencyClass = (item: AtRiskItem) => {
     const u = (item.urgency || "").toUpperCase();
     if (u === "CRITICAL") return "risk-critical";
     if (u === "HIGH") return "risk-high";
     return "risk-medium";
   };
 
-  const urgencyLabel = (item) => {
+  const urgencyLabel = (item: AtRiskItem) => {
     const u = (item.urgency || "").toUpperCase();
     if (u === "CRITICAL") return "CRITICAL";
     if (u === "HIGH") return "HIGH";

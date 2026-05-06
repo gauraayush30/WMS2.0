@@ -3,6 +3,8 @@ import { LogOut, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import CustomerSwitcher from "./CustomerSwitcher";
+import WarehouseSwitcher from "./WarehouseSwitcher";
 
 export default function TopBar() {
   const { user, logout } = useAuth();
@@ -13,6 +15,9 @@ export default function TopBar() {
         Warehouse Management System
       </h1>
       <div className="flex items-center gap-3">
+        <WarehouseSwitcher />
+        <CustomerSwitcher />
+        <Separator orientation="vertical" className="h-5" />
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <User size={15} />
           <span className="font-medium text-foreground">{user?.name}</span>

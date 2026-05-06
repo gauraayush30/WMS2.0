@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import { useAuth, API } from "../context/AuthContext";
 import { Users, Shield } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -98,7 +97,8 @@ export default function UsersPage() {
                   <TableCell className="text-sm">{u.email}</TableCell>
                   <TableCell>
                     {user?.role === "admin" && u.id !== user?.id ? (
-                      <Select
+                      <select
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                         value={u.role}
                         disabled={updatingId === u.id}
                         onChange={(e) => handleRoleChange(u.id, e.target.value)}
@@ -106,7 +106,7 @@ export default function UsersPage() {
                         {ROLE_OPTIONS.map((r) => (
                           <option key={r} value={r}>{r}</option>
                         ))}
-                      </Select>
+                      </select>
                     ) : (
                       <Badge variant="secondary" className="capitalize">
                         <Shield size={12} className="mr-1" /> {u.role}

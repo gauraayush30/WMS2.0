@@ -1,5 +1,45 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import "./ReplenishmentTab.css";
+
+interface RepSettings {
+  lead_time_days: number;
+  min_order_qty: number;
+  reorder_point: number;
+  safety_stock: number;
+  target_stock_level: number;
+}
+
+interface RepRecommendation {
+  reorder_needed: boolean;
+  order_quantity: number;
+  urgency: string;
+  projected_stock_at_lead_time: number;
+  suggested_order_date: string;
+  demand_during_lead_time: number;
+  expected_arrival_date: string;
+  message: string;
+}
+
+interface RepForm {
+  lead_time_days: number;
+  min_order_qty: number;
+  reorder_point: number;
+  safety_stock: number;
+  target_stock_level: number;
+}
+
+interface ReplenishmentTabProps {
+  selectedSku: string;
+  repSettings: RepSettings | null;
+  repRecommendation: RepRecommendation | null;
+  repLoading: boolean;
+  repError: string;
+  repMessage: string;
+  repForm: RepForm;
+  onRepFormChange: (form: RepForm) => void;
+  onRepSettingsSubmit: (e: React.FormEvent) => void;
+  onRefresh: () => void;
+}
 
 function ReplenishmentTab({
   selectedSku,
@@ -12,10 +52,10 @@ function ReplenishmentTab({
   onRepFormChange,
   onRepSettingsSubmit,
   onRefresh,
-}) {
+}: ReplenishmentTabProps) {
   const [editOpen, setEditOpen] = useState(false);
 
-  const getUrgencyClass = (urgency) => {
+  const getUrgencyClass = (urgency: string) => {
     if (!urgency) return "";
     const u = urgency.toLowerCase();
     if (u === "critical" || u === "high") return "urgency-high";
@@ -23,7 +63,7 @@ function ReplenishmentTab({
     return "urgency-low";
   };
 
-  const getUrgencyIcon = (urgency) => {
+  const getUrgencyIcon = (urgency: string) => {
     if (!urgency) return "●";
     const u = urgency.toLowerCase();
     if (u === "critical" || u === "high") return "▲";
@@ -31,14 +71,14 @@ function ReplenishmentTab({
     return "●";
   };
 
-  const handleFieldChange = (field, min) => (e) => {
+  const handleFieldChange = (field: string, min: number) => (e: React.ChangeEvent<HTMLInputElement>) => {
     onRepFormChange({
       ...repForm,
       [field]: Math.max(min, parseInt(e.target.value) || min),
     });
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onRepSettingsSubmit(e);
   };
@@ -173,7 +213,7 @@ function ReplenishmentTab({
             <button
               className="rep-edit-toggle"
               type="button"
-              onClick={() => setEditOpen((v) => !v)}
+              onClick={() => setEditOpen((v: boolean) => !v)}
             >
               {editOpen ? "Cancel" : "Edit"}
             </button>
@@ -281,9 +321,9 @@ function ReplenishmentTab({
 }
 
 /* ── Mini stock gauge visualisation ── */
-function StockGauge({ projected, safetyStock, reorderPoint, target }) {
+function StockGauge({ projected, safetyStock, reorderPoint, target }: { projected: number; safetyStock: number; reorderPoint: number; target: number }) {
   const max = Math.max(target, projected, reorderPoint, safetyStock) * 1.2 || 1;
-  const pct = (v) => Math.min(100, Math.max(0, (v / max) * 100));
+  const pct = (v: number) => Math.min(100, Math.max(0, (v / max) * 100));
 
   const projectedPct = pct(projected);
   const reorderPct = pct(reorderPoint);

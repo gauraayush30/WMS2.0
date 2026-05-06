@@ -14,7 +14,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -281,10 +280,10 @@ export default function InboundOutboundPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select
+          <select
+            className="flex h-9 w-35 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             value={days}
             onChange={(e) => setDays(e.target.value)}
-            className="w-35"
           >
             <option value="7">Last 7 days</option>
             <option value="14">Last 14 days</option>
@@ -293,7 +292,7 @@ export default function InboundOutboundPage() {
             <option value="90">Last 90 days</option>
             <option value="180">Last 180 days</option>
             <option value="365">Last 365 days</option>
-          </Select>
+          </select>
           <Button variant="outline" size="sm" onClick={exportCSV}>
             <Download size={16} className="mr-1.5" />
             Export

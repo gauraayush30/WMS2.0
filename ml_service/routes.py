@@ -18,10 +18,14 @@ from db import (
     save_uploaded_history,
     delete_model_metadata,
     delete_uploaded_history,
+    get_current_stock,
+    get_product_replenishment_inputs,
+    get_customer_outbound_history,
 )
 from csv_handler import generate_csv_template, parse_and_validate_csv
 from trainer import train_model, delete_model as delete_model_file
 from predictor import predict_demand
+from replenishment import compute_replenishment
 
 from fastapi.responses import StreamingResponse
 import io
@@ -197,6 +201,100 @@ def training_data_preview(
 
 
 # ── Delete Model ─────────────────────────────────────────────────────────────
+
+# ── v2: Forecast (7d + 30d) + Replenishment ────────────────────────────────
+
+@router.get("/forecast/v2/{product_id}")
+def forecast_v2(
+    product_id: int,
+    business_id: int = Query(...),
+    customer_id: int | None = Query(None),
+):
+    """v2 forecast: returns 7-day and 30-day P50 series + replenishment.
+
+    The model itself is the existing per-product trainer (XGBoost/GBR with
+    holiday + lag features). When no model exists or the product has too
+    little data, we fall back to a customer-level rolling-mean heuristic
+    so the customer still gets a usable recommendation.
+    """
+    product = get_product_info(product_id, business_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    rep_inputs = get_product_replenishment_inputs(product_id, business_id)
+    current_stock = int(rep_inputs.get("stock_at_warehouse", 0) or 0)
+
+    # Try the trained model first.
+    forecast_30: list[float] = []
+    forecast_7: list[float] = []
+    rolling_std_28 = 0.0
+    source = "trained_model"
+
+    try:
+        pred = predict_demand(product_id, business_id, days_ahead=30)
+        # predict_demand returns {predictions: [{date, predicted_outbound, ...}]}
+        preds = pred.get("predictions", []) if isinstance(pred, dict) else []
+        forecast_30 = [float(p.get("predicted_outbound", 0)) for p in preds[:30]]
+        forecast_7 = forecast_30[:7]
+    except Exception:
+        forecast_30 = []
+        forecast_7 = []
+
+    if not forecast_30:
+        # Fallback: use the customer's recent average daily outbound.
+        if customer_id is not None:
+            cdf = get_customer_outbound_history(business_id, customer_id, days=120)
+            if not cdf.empty:
+                # Distribute customer-level demand by product's share of recent outbound
+                auto = get_daily_aggregated_transactions(product_id, business_id, customer_id)
+                share = 0.0
+                if not auto.empty:
+                    cust_total = float(cdf["outbound_qty"].sum()) or 1.0
+                    share = float(auto["outbound_qty"].sum()) / cust_total
+                avg = float(cdf["outbound_qty"].mean())
+                forecast_30 = [round(avg * share, 2)] * 30
+                forecast_7 = forecast_30[:7]
+                rolling_std_28 = float(cdf["outbound_qty"].tail(28).std() or 0)
+                source = "customer_rolling_mean"
+
+        if not forecast_30:
+            # Final fallback: own product rolling mean (if anything)
+            auto = get_daily_aggregated_transactions(product_id, business_id, customer_id)
+            avg = float(auto["outbound_qty"].mean()) if not auto.empty else 0.0
+            std = float(auto["outbound_qty"].tail(28).std() or 0) if not auto.empty else 0.0
+            forecast_30 = [round(avg, 2)] * 30
+            forecast_7 = forecast_30[:7]
+            rolling_std_28 = std
+            source = "product_rolling_mean"
+
+    if rolling_std_28 == 0.0:
+        # Use rolling std from the trained data window if available
+        auto = get_daily_aggregated_transactions(product_id, business_id, customer_id)
+        if not auto.empty:
+            rolling_std_28 = float(auto["outbound_qty"].tail(28).std() or 0)
+
+    repl = compute_replenishment(
+        product=rep_inputs,
+        forecast_horizon_30=forecast_30,
+        rolling_std_28=rolling_std_28,
+        current_stock=current_stock,
+    )
+
+    return {
+        "product_id": product_id,
+        "customer_id": customer_id,
+        "source": source,
+        "forecast_7d": {
+            "daily": forecast_7,
+            "total": round(sum(forecast_7), 2),
+        },
+        "forecast_30d": {
+            "daily": forecast_30,
+            "total": round(sum(forecast_30), 2),
+        },
+        "replenishment": repl,
+    }
+
 
 @router.delete("/model/{product_id}")
 def delete_model_endpoint(

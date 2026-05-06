@@ -12,7 +12,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, status, Depends, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 
-from auth import get_current_user_id
+from auth import get_current_user_id, UserContext, get_user_context
 from db import get_user_by_id
 
 router = APIRouter(prefix="/products/{product_id}/forecast", tags=["ML Forecast"])
@@ -202,3 +202,21 @@ async def forecast_delete_model(product_id: int, user_id: int = Depends(get_curr
     """Delete trained model to retrain from scratch."""
     _, biz_id = _get_user_context(user_id)
     return await _proxy_delete(f"/model/{product_id}", biz_id)
+
+
+@router.get("/v2")
+async def forecast_v2(
+    product_id: int,
+    ctx: UserContext = Depends(get_user_context),
+):
+    """v2 forecast: 7-day + 30-day P50 series + replenishment recommendation.
+
+    Customer-scoped via UserContext: customer roles see only their own
+    customer's forecast; warehouse roles see whichever customer owns
+    the product.
+    """
+    cust_for_query = ctx.resolve_customer_filter(None) or ctx.customer_id
+    extra: dict = {}
+    if cust_for_query is not None:
+        extra["customer_id"] = cust_for_query
+    return await _proxy_get(f"/forecast/v2/{product_id}", ctx.business_id, extra)

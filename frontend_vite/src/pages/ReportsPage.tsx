@@ -1,5 +1,11 @@
 import { useNavigate } from "react-router-dom";
-import { TrendingUp, ArrowUpDown } from "lucide-react";
+import {
+  TrendingUp,
+  ArrowUpDown,
+  Recycle,
+  LayoutGrid,
+  Activity,
+} from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { motion } from "framer-motion";
 
@@ -19,6 +25,30 @@ const reports = [
     description:
       "View top inbound & outbound products and track movement trends over time.",
     color: "bg-blue-50 text-blue-600",
+  },
+  {
+    to: "/reports/fifo-fefo",
+    icon: Recycle,
+    label: "FIFO / FEFO + Aging",
+    description:
+      "Pick-strategy compliance, age buckets, and ₹-at-risk for expiring stock.",
+    color: "bg-amber-50 text-amber-600",
+  },
+  {
+    to: "/reports/complete-analysis",
+    icon: LayoutGrid,
+    label: "Complete Analysis",
+    description:
+      "Single-SKU 360 view: inbound, outbound, stock curve, revenue, COGS, margin, DIO, turns.",
+    color: "bg-violet-50 text-violet-600",
+  },
+  {
+    to: "/reports/behavior",
+    icon: Activity,
+    label: "Behavior Analysis",
+    description:
+      "ABC × XYZ matrix and lifecycle classification across all SKUs.",
+    color: "bg-rose-50 text-rose-600",
   },
 ];
 

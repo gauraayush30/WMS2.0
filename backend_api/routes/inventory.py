@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from auth import get_current_user_id
+from auth import get_current_user_id, get_user_context, UserContext
 from db import (
     get_user_by_id,
     get_inventory_overview,
@@ -69,11 +69,12 @@ def inventory_overview(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     search: str = Query(""),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """Inventory overview – all products with current stock (paginated)."""
-    biz_id = _get_user_business_id(user_id)
-    return get_inventory_overview(biz_id, page, per_page, search)
+    cust = ctx.resolve_customer_filter(customer_id)
+    return get_inventory_overview(ctx.business_id, cust, page, per_page, search)
 
 
 @router.get("/summary")

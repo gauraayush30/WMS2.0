@@ -64,13 +64,15 @@ def register(req: RegisterRequest):
             )
 
     try:
+        # Phase-1 revamp: registering with a business_name → warehouse_admin.
+        # Without a business → user is unattached and will accept an invite.
         user = create_user_v2(
             username=req.username,
             name=req.name,
             email=req.email,
             hashed_password=hashed,
             business_id=business_id,
-            role="admin" if business_id else "employee",
+            role="warehouse_admin" if business_id else "warehouse_staff",
         )
     except Exception as e:
         raise HTTPException(
@@ -87,6 +89,7 @@ def register(req: RegisterRequest):
             "name": user["name"],
             "email": user["email"],
             "business_id": user["business_id"],
+            "customer_id": user.get("customer_id"),
             "role": user["role"],
         },
     }
@@ -116,7 +119,8 @@ def login(req: LoginRequest):
             "name": user["name"],
             "email": user["email"],
             "business_id": user.get("business_id"),
-            "role": user.get("role", "employee"),
+            "customer_id": user.get("customer_id"),
+            "role": user.get("role", "warehouse_staff"),
         },
     }
 
@@ -133,5 +137,6 @@ def me(user_id: int = Depends(get_current_user_id)):
         "name": user["name"],
         "email": user["email"],
         "business_id": user.get("business_id"),
-        "role": user.get("role", "employee"),
+        "customer_id": user.get("customer_id"),
+        "role": user.get("role", "warehouse_staff"),
     }

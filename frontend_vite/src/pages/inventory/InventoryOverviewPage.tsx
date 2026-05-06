@@ -18,6 +18,9 @@ interface ProductStock {
   stock_at_warehouse: number;
   uom: string;
   updated_at: string;
+  customer_id: number | null;
+  customer_name: string | null;
+  customer_code: string | null;
 }
 
 interface StockBatch {
@@ -41,7 +44,7 @@ interface StockBatchDialogData {
 }
 
 export default function InventoryOverviewPage() {
-  const { authFetch } = useAuth();
+  const { authFetch, effectiveCustomerId, selectedWarehouseId, isWarehouse } = useAuth();
   const navigate = useNavigate();
 
   const [products, setProducts] = useState<ProductStock[]>([]);
@@ -59,9 +62,14 @@ export default function InventoryOverviewPage() {
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await authFetch(
-          `${API}/inventory/overview?page=${page}&per_page=18&search=${encodeURIComponent(search)}`,
-        );
+        const params = new URLSearchParams({
+          page: String(page),
+          per_page: "18",
+          search: search,
+        });
+        if (effectiveCustomerId) params.set("customer_id", String(effectiveCustomerId));
+        if (selectedWarehouseId) params.set("warehouse_id", String(selectedWarehouseId));
+        const r = await authFetch(`${API}/inventory/overview?${params.toString()}`);
         const data = await r.json();
         if (!cancelled) {
           setProducts(data.products || []);
@@ -81,7 +89,7 @@ export default function InventoryOverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [authFetch, page, search]);
+  }, [authFetch, page, search, effectiveCustomerId, selectedWarehouseId]);
 
   const stockVariant = (stock: number) => {
     if (stock === 0) return "destructive" as const;
@@ -188,6 +196,7 @@ export default function InventoryOverviewPage() {
               <TableRow>
                 <TableHead>Product Name</TableHead>
                 <TableHead>SKU</TableHead>
+                {isWarehouse && !effectiveCustomerId && <TableHead>Customer</TableHead>}
                 <TableHead className="text-right">Stock</TableHead>
                 <TableHead>UOM</TableHead>
                 <TableHead className="text-right">Price</TableHead>
@@ -203,6 +212,12 @@ export default function InventoryOverviewPage() {
                 >
                   <TableCell className="font-medium text-sm">{p.name}</TableCell>
                   <TableCell><code className="text-xs">{p.sku_code}</code></TableCell>
+                  {isWarehouse && !effectiveCustomerId && (
+                    <TableCell className="text-xs text-muted-foreground">
+                      {p.customer_name || "—"}
+                      {p.customer_code && <span className="ml-1 opacity-60">({p.customer_code})</span>}
+                    </TableCell>
+                  )}
                   <TableCell className="text-right text-sm">{p.stock_at_warehouse}</TableCell>
                   <TableCell className="text-sm">{p.uom || "pcs"}</TableCell>
                   <TableCell className="text-right text-sm">₹{Number(p.price).toFixed(2)}</TableCell>

@@ -13,13 +13,32 @@ interface User {
   name: string;
   email: string;
   business_id: number | null;
-  role: string;
+  customer_id: number | null;
+  role: string; // warehouse_admin | warehouse_staff | customer_admin | customer_staff
 }
+
+export type Role =
+  | "warehouse_admin"
+  | "warehouse_staff"
+  | "customer_admin"
+  | "customer_staff";
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   authLoading: boolean;
+  /** Selected customer_id filter for warehouse roles. null = all customers. */
+  selectedCustomerId: number | null;
+  setSelectedCustomerId: (id: number | null) => void;
+  /** Selected warehouse_id filter. null = all warehouses. */
+  selectedWarehouseId: number | null;
+  setSelectedWarehouseId: (id: number | null) => void;
+  /** Convenience: the customer_id to apply to data queries (forced for customer roles). */
+  effectiveCustomerId: number | null;
+  isWarehouse: boolean;
+  isCustomer: boolean;
+  isWarehouseAdmin: boolean;
+  isCustomerAdmin: boolean;
   login: (email: string, password: string) => Promise<User>;
   register: (
     username: string,
@@ -49,6 +68,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.getItem("wms_token"),
   );
   const [authLoading] = useState(false);
+
+  const [selectedCustomerId, setSelectedCustomerIdState] = useState<number | null>(() => {
+    const v = localStorage.getItem("wms_selected_customer_id");
+    return v ? Number(v) : null;
+  });
+  const setSelectedCustomerId = useCallback((id: number | null) => {
+    if (id === null) localStorage.removeItem("wms_selected_customer_id");
+    else localStorage.setItem("wms_selected_customer_id", String(id));
+    setSelectedCustomerIdState(id);
+  }, []);
+
+  const [selectedWarehouseId, setSelectedWarehouseIdState] = useState<number | null>(() => {
+    const v = localStorage.getItem("wms_selected_warehouse_id");
+    return v ? Number(v) : null;
+  });
+  const setSelectedWarehouseId = useCallback((id: number | null) => {
+    if (id === null) localStorage.removeItem("wms_selected_warehouse_id");
+    else localStorage.setItem("wms_selected_warehouse_id", String(id));
+    setSelectedWarehouseIdState(id);
+  }, []);
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await fetch(`${API}/auth/login`, {
@@ -155,12 +194,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const role = (user?.role || "") as Role | "";
+  const isWarehouse = role === "warehouse_admin" || role === "warehouse_staff";
+  const isCustomer = role === "customer_admin" || role === "customer_staff";
+  const isWarehouseAdmin = role === "warehouse_admin";
+  const isCustomerAdmin = role === "customer_admin";
+
+  // Customer users can never override the customer filter — it is forced to
+  // their own customer_id by the backend, but we mirror it here so UI
+  // components that read effectiveCustomerId don't need to know the role.
+  const effectiveCustomerId = isCustomer ? (user?.customer_id ?? null) : selectedCustomerId;
+
   return (
     <AuthContext.Provider
       value={{
         user,
         token,
         authLoading,
+        selectedCustomerId,
+        setSelectedCustomerId,
+        selectedWarehouseId,
+        setSelectedWarehouseId,
+        effectiveCustomerId,
+        isWarehouse,
+        isCustomer,
+        isWarehouseAdmin,
+        isCustomerAdmin,
         login,
         register,
         logout,

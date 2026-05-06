@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth, API } from "../context/AuthContext";
-import { Plus, Search, MoreVertical, Eye, Pencil, Trash2, MapPin } from "lucide-react";
+import { Plus, Search, MoreVertical, Eye, Pencil, Trash2, MapPin, Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -26,10 +26,12 @@ interface Product {
   location_bin: string;
   created_at: string;
   updated_at: string;
+  customer_name: string | null;
+  customer_code: string | null;
 }
 
 export default function ProductsPage() {
-  const { authFetch } = useAuth();
+  const { authFetch, effectiveCustomerId, selectedWarehouseId, isWarehouse } = useAuth();
   const navigate = useNavigate();
   const [products, setProducts] = useState<Product[]>([]);
   const [page, setPage] = useState(1);
@@ -37,11 +39,14 @@ export default function ProductsPage() {
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const searchRef = useRef<ReturnType<typeof setTimeout>>();
+  const searchRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const fetchProducts = useCallback(() => {
     setLoading(true);
-    authFetch(`${API}/products?page=${page}&per_page=15&search=${encodeURIComponent(search)}`)
+    const params = new URLSearchParams({ page: String(page), per_page: "15", search });
+    if (effectiveCustomerId) params.set("customer_id", String(effectiveCustomerId));
+    if (selectedWarehouseId) params.set("warehouse_id", String(selectedWarehouseId));
+    authFetch(`${API}/products?${params.toString()}`)
       .then((r) => r.json())
       .then((data) => {
         setProducts(data.products || []);
@@ -50,7 +55,7 @@ export default function ProductsPage() {
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [authFetch, page, search]);
+  }, [authFetch, page, search, effectiveCustomerId, selectedWarehouseId]);
 
   useEffect(() => { fetchProducts(); }, [fetchProducts]);
 
@@ -121,6 +126,7 @@ export default function ProductsPage() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>SKU Code</TableHead>
+                  {isWarehouse && !effectiveCustomerId && <TableHead>Customer</TableHead>}
                   <TableHead>Price</TableHead>
                   <TableHead>UOM</TableHead>
                   <TableHead>Stock</TableHead>
@@ -134,6 +140,12 @@ export default function ProductsPage() {
                   <TableRow key={p.id} className="cursor-pointer" onClick={() => navigate(`/products/${p.id}`)}>
                     <TableCell className="font-medium">{p.name}</TableCell>
                     <TableCell><code className="text-xs bg-muted px-1.5 py-0.5 rounded">{p.sku_code}</code></TableCell>
+                    {isWarehouse && !effectiveCustomerId && (
+                      <TableCell className="text-xs text-muted-foreground">
+                        {p.customer_name || "—"}
+                        {p.customer_code && <span className="ml-1 opacity-60">({p.customer_code})</span>}
+                      </TableCell>
+                    )}
                     <TableCell>₹{Number(p.price).toFixed(2)}</TableCell>
                     <TableCell className="text-muted-foreground">{p.uom || "pcs"}</TableCell>
                     <TableCell>{stockBadge(p.stock_at_warehouse)}</TableCell>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Bar } from "react-chartjs-2";
 import "./ProductMetricsTab.css";
 import {
@@ -48,7 +48,7 @@ function ProductMetricsTab() {
 
   const [startDate, setStartDate] = useState(thirtyDaysAgo);
   const [endDate, setEndDate] = useState(today);
-  const [metrics, setMetrics] = useState([]);
+  const [metrics, setMetrics] = useState<{ sku_id: string; sku_name: string; total_sales: number; total_purchases: number }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [fetched, setFetched] = useState(false);
@@ -116,8 +116,8 @@ function ProductMetricsTab() {
       } finally {
         setAccuracyLoading(false);
       }
-    } catch (e) {
-      setError(e.message || "Error fetching metrics");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error fetching metrics");
     } finally {
       setLoading(false);
     }
@@ -205,10 +205,10 @@ function ProductMetricsTab() {
   const chartOpts = {
     responsive: true,
     plugins: {
-      legend: { position: "top" },
+      legend: { position: "top" as const },
       tooltip: {
         callbacks: {
-          title: (items) => {
+          title: (items: { dataIndex: number }[]) => {
             const idx = items[0].dataIndex;
             return `${metrics[idx].sku_id} — ${metrics[idx].sku_name}`;
           },
@@ -518,11 +518,11 @@ function ProductMetricsTab() {
                       legend: { position: "top" as const },
                       tooltip: {
                         callbacks: {
-                          title: (items) => {
+                          title: (items: { dataIndex: number }[]) => {
                             const idx = items[0].dataIndex;
                             return `${accuracy[idx].sku_id} \u2014 ${accuracy[idx].sku_name}`;
                           },
-                          afterBody: (items) => {
+                          afterBody: (items: { dataIndex: number }[]) => {
                             const idx = items[0].dataIndex;
                             const a = accuracy[idx];
                             return [
@@ -533,10 +533,10 @@ function ProductMetricsTab() {
                           },
                         },
                       },
-                        title: {
-                          display: true,
-                          text: "Actual vs Predicted Sales",
-                        },
+                      title: {
+                        display: true,
+                        text: "Actual vs Predicted Sales",
+                      },
                     },
                     scales: {
                       y: { beginAtZero: true, ticks: { stepSize: 1 }, title: { display: true, text: "Quantity" } },

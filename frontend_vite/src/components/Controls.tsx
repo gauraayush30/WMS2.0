@@ -1,4 +1,16 @@
-import React from "react";
+interface ControlsProps {
+  skus: { sku_id: string; sku_name: string }[];
+  selectedSku: string;
+  onSkuChange: (sku: string) => void;
+  activeTab: string;
+  onTabChange: (tab: string) => void;
+  historyDays: number;
+  forecastDays: number;
+  onHistoryDaysChange: (d: number) => void;
+  onForecastDaysChange: (d: number) => void;
+  onRefresh: () => void;
+  loading: boolean;
+}
 
 function Controls({
   skus,
@@ -12,7 +24,7 @@ function Controls({
   onForecastDaysChange,
   onRefresh,
   loading,
-}) {
+}: ControlsProps) {
   const showDayControls =
     activeTab !== "transaction" &&
     activeTab !== "replenishment" &&
