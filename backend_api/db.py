@@ -3036,6 +3036,196 @@ def create_buyer(*, business_id: int, customer_id: int, name: str,
     return dict(row)
 
 
+def get_buyer_by_id(buyer_id: int, business_id: int) -> dict | None:
+    query = text(f"""
+        SELECT {BUYER_COLUMNS} FROM buyers
+        WHERE id = :id AND business_id = :biz
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"id": buyer_id, "biz": business_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def update_buyer(buyer_id: int, business_id: int, *, name: str,
+                 gstin: str = "", contact_name: str = "",
+                 contact_phone: str = "", is_active: bool = True) -> dict | None:
+    query = text(f"""
+        UPDATE buyers SET name = :n, gstin = :g, contact_name = :cn,
+            contact_phone = :cp, is_active = :active
+        WHERE id = :id AND business_id = :biz
+        RETURNING {BUYER_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "id": buyer_id, "biz": business_id, "n": name, "g": gstin,
+            "cn": contact_name, "cp": contact_phone, "active": is_active,
+        }).mappings().fetchone()
+    return dict(row) if row else None
+
+
+# ── Buyer locations ─────────────────────────────────────────────────────────
+
+BUYER_LOCATION_COLUMNS = (
+    "id, buyer_id, business_id, name, address, city, state, zip_code, "
+    "contact_person, contact_phone, is_active, created_at"
+)
+
+
+def list_buyer_locations(buyer_id: int, business_id: int) -> list[dict]:
+    query = text(f"""
+        SELECT {BUYER_LOCATION_COLUMNS} FROM buyer_locations
+        WHERE buyer_id = :bid AND business_id = :biz AND is_active = TRUE
+        ORDER BY name
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"bid": buyer_id, "biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def create_buyer_location(*, buyer_id: int, business_id: int, name: str,
+                           address: str = "", city: str = "", state: str = "",
+                           zip_code: str = "", contact_person: str = "",
+                           contact_phone: str = "") -> dict:
+    query = text(f"""
+        INSERT INTO buyer_locations (buyer_id, business_id, name, address, city,
+                                      state, zip_code, contact_person, contact_phone)
+        VALUES (:bid, :biz, :n, :a, :c, :s, :z, :cp, :cph)
+        RETURNING {BUYER_LOCATION_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "bid": buyer_id, "biz": business_id, "n": name,
+            "a": address, "c": city, "s": state, "z": zip_code,
+            "cp": contact_person, "cph": contact_phone,
+        }).mappings().first()
+    return dict(row)
+
+
+def update_buyer_location(location_id: int, business_id: int, *, name: str,
+                           address: str = "", city: str = "", state: str = "",
+                           zip_code: str = "", contact_person: str = "",
+                           contact_phone: str = "",
+                           is_active: bool = True) -> dict | None:
+    query = text(f"""
+        UPDATE buyer_locations
+        SET name = :n, address = :a, city = :c, state = :s, zip_code = :z,
+            contact_person = :cp, contact_phone = :cph, is_active = :active
+        WHERE id = :id AND business_id = :biz
+        RETURNING {BUYER_LOCATION_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "id": location_id, "biz": business_id, "n": name,
+            "a": address, "c": city, "s": state, "z": zip_code,
+            "cp": contact_person, "cph": contact_phone, "active": is_active,
+        }).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def delete_buyer_location(location_id: int, business_id: int) -> bool:
+    query = text("DELETE FROM buyer_locations WHERE id = :id AND business_id = :biz")
+    with engine.begin() as conn:
+        result = conn.execute(query, {"id": location_id, "biz": business_id})
+    return result.rowcount > 0
+
+
+# ── Supplier (Seller) helpers ───────────────────────────────────────────────
+
+def get_supplier_by_id(supplier_id: int, business_id: int) -> dict | None:
+    query = text(f"""
+        SELECT {SUPPLIER_COLUMNS} FROM suppliers
+        WHERE id = :id AND business_id = :biz
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(query, {"id": supplier_id, "biz": business_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def update_supplier(supplier_id: int, business_id: int, *, name: str,
+                    gstin: str = "", contact_name: str = "",
+                    contact_email: str = "", contact_phone: str = "",
+                    address: str = "", is_active: bool = True) -> dict | None:
+    query = text(f"""
+        UPDATE suppliers SET name = :n, gstin = :g, contact_name = :cn,
+            contact_email = :ce, contact_phone = :cp, address = :a, is_active = :active
+        WHERE id = :id AND business_id = :biz
+        RETURNING {SUPPLIER_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "id": supplier_id, "biz": business_id, "n": name, "g": gstin,
+            "cn": contact_name, "ce": contact_email, "cp": contact_phone,
+            "a": address, "active": is_active,
+        }).mappings().fetchone()
+    return dict(row) if row else None
+
+
+# ── Seller locations ────────────────────────────────────────────────────────
+
+SELLER_LOCATION_COLUMNS = (
+    "id, supplier_id, business_id, name, address, city, state, zip_code, "
+    "contact_person, contact_phone, is_active, created_at"
+)
+
+
+def list_seller_locations(supplier_id: int, business_id: int) -> list[dict]:
+    query = text(f"""
+        SELECT {SELLER_LOCATION_COLUMNS} FROM seller_locations
+        WHERE supplier_id = :sid AND business_id = :biz AND is_active = TRUE
+        ORDER BY name
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"sid": supplier_id, "biz": business_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def create_seller_location(*, supplier_id: int, business_id: int, name: str,
+                            address: str = "", city: str = "", state: str = "",
+                            zip_code: str = "", contact_person: str = "",
+                            contact_phone: str = "") -> dict:
+    query = text(f"""
+        INSERT INTO seller_locations (supplier_id, business_id, name, address, city,
+                                       state, zip_code, contact_person, contact_phone)
+        VALUES (:sid, :biz, :n, :a, :c, :s, :z, :cp, :cph)
+        RETURNING {SELLER_LOCATION_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "sid": supplier_id, "biz": business_id, "n": name,
+            "a": address, "c": city, "s": state, "z": zip_code,
+            "cp": contact_person, "cph": contact_phone,
+        }).mappings().first()
+    return dict(row)
+
+
+def update_seller_location(location_id: int, business_id: int, *, name: str,
+                            address: str = "", city: str = "", state: str = "",
+                            zip_code: str = "", contact_person: str = "",
+                            contact_phone: str = "",
+                            is_active: bool = True) -> dict | None:
+    query = text(f"""
+        UPDATE seller_locations
+        SET name = :n, address = :a, city = :c, state = :s, zip_code = :z,
+            contact_person = :cp, contact_phone = :cph, is_active = :active
+        WHERE id = :id AND business_id = :biz
+        RETURNING {SELLER_LOCATION_COLUMNS}
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(query, {
+            "id": location_id, "biz": business_id, "n": name,
+            "a": address, "c": city, "s": state, "z": zip_code,
+            "cp": contact_person, "cph": contact_phone, "active": is_active,
+        }).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def delete_seller_location(location_id: int, business_id: int) -> bool:
+    query = text("DELETE FROM seller_locations WHERE id = :id AND business_id = :biz")
+    with engine.begin() as conn:
+        result = conn.execute(query, {"id": location_id, "biz": business_id})
+    return result.rowcount > 0
+
+
 # ── Inbound orders (GRN) ────────────────────────────────────────────────────
 
 INBOUND_ORDER_COLUMNS = (
@@ -3081,7 +3271,7 @@ def create_inbound_order(
                  total_qty, total_amount, notes, created_by)
             VALUES
                 (:biz, :cust, :wh, :sup, :grn, :po, :inv, :idate,
-                 COALESCE(:rcv::timestamptz, NOW()),
+                 COALESCE(CAST(:rcv AS timestamptz), NOW()),
                  :tq, :ta, :n, :uid)
             RETURNING {INBOUND_ORDER_COLUMNS}
         """), {
@@ -3104,7 +3294,7 @@ def create_inbound_order(
                      tax_pct, discount_pct, batch_code, manufactured_at, expires_at, notes)
                 VALUES
                     (:iid, :pid, :eq, :uc, :la, :tp, :dp, :bc,
-                     :mfg::date, :exp::date, :n)
+                     CAST(:mfg AS date), CAST(:exp AS date), :n)
                 RETURNING id, product_id, expected_qty, received_qty, rejected_qty,
                           unit_cost, line_amount, tax_pct, discount_pct,
                           batch_code, manufactured_at, expires_at, notes
@@ -3129,21 +3319,21 @@ def list_inbound_orders(
     warehouse_id: int | None = None, status_filter: str | None = None,
     page: int = 1, per_page: int = 20,
 ) -> dict:
-    where = ["business_id = :biz"]
+    where = ["io.business_id = :biz"]
     params: dict = {"biz": business_id}
     if customer_id is not None:
-        where.append("customer_id = :cust"); params["cust"] = customer_id
+        where.append("io.customer_id = :cust"); params["cust"] = customer_id
     if warehouse_id is not None:
-        where.append("warehouse_id = :wh"); params["wh"] = warehouse_id
+        where.append("io.warehouse_id = :wh"); params["wh"] = warehouse_id
     if status_filter:
-        where.append("status = :st"); params["st"] = status_filter
+        where.append("io.status = :st"); params["st"] = status_filter
 
     where_sql = " AND ".join(where)
     offset = (page - 1) * per_page
 
     with engine.connect() as conn:
         total = conn.execute(
-            text(f"SELECT COUNT(*) FROM inbound_orders WHERE {where_sql}"), params
+            text(f"SELECT COUNT(*) FROM inbound_orders io WHERE {where_sql}"), params
         ).scalar()
         rows = conn.execute(text(f"""
             SELECT io.*, c.name AS customer_name, c.code AS customer_code
@@ -3367,19 +3557,19 @@ def list_outbound_orders(
     warehouse_id: int | None = None, status_filter: str | None = None,
     page: int = 1, per_page: int = 20,
 ) -> dict:
-    where = ["business_id = :biz"]
+    where = ["oo.business_id = :biz"]
     params: dict = {"biz": business_id}
     if customer_id is not None:
-        where.append("customer_id = :cust"); params["cust"] = customer_id
+        where.append("oo.customer_id = :cust"); params["cust"] = customer_id
     if warehouse_id is not None:
-        where.append("warehouse_id = :wh"); params["wh"] = warehouse_id
+        where.append("oo.warehouse_id = :wh"); params["wh"] = warehouse_id
     if status_filter:
-        where.append("status = :st"); params["st"] = status_filter
+        where.append("oo.status = :st"); params["st"] = status_filter
     where_sql = " AND ".join(where)
     offset = (page - 1) * per_page
     with engine.connect() as conn:
         total = conn.execute(
-            text(f"SELECT COUNT(*) FROM outbound_orders WHERE {where_sql}"), params
+            text(f"SELECT COUNT(*) FROM outbound_orders oo WHERE {where_sql}"), params
         ).scalar()
         rows = conn.execute(text(f"""
             SELECT oo.*, c.name AS customer_name, c.code AS customer_code

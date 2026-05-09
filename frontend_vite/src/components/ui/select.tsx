@@ -5,16 +5,20 @@ import { cn } from "@/lib/utils";
 
 interface SelectContextValue {
   value: string;
-  onValueChange: (v: string) => void;
+  displayLabel: string;
+  onValueChange: (v: string, label: string) => void;
   open: boolean;
   setOpen: (v: boolean) => void;
+  registerItem: (value: string, label: string) => void;
 }
 
 const SelectContext = React.createContext<SelectContextValue>({
   value: "",
+  displayLabel: "",
   onValueChange: () => {},
   open: false,
   setOpen: () => {},
+  registerItem: () => {},
 });
 
 /* ── Root ──────────────────────────────────────────────── */
@@ -28,14 +32,36 @@ interface SelectProps {
 
 function Select({ value, onValueChange, children, disabled }: SelectProps) {
   const [open, setOpen] = React.useState(false);
+  const labelsRef = React.useRef<Map<string, string>>(new Map());
+  const [displayLabel, setDisplayLabel] = React.useState("");
+
+  const registerItem = React.useCallback((itemValue: string, label: string) => {
+    labelsRef.current.set(itemValue, label);
+    // If this item matches the current value, update display label
+    if (itemValue === value) {
+      setDisplayLabel(label);
+    }
+  }, [value]);
+
+  // Update display label whenever value changes
+  React.useEffect(() => {
+    const label = labelsRef.current.get(value);
+    if (label) {
+      setDisplayLabel(label);
+    } else {
+      setDisplayLabel("");
+    }
+  }, [value]);
 
   return (
     <SelectContext.Provider
       value={{
         value,
-        onValueChange: (v: string) => {
+        displayLabel,
+        onValueChange: (v: string, label: string) => {
           if (!disabled) {
             onValueChange(v);
+            setDisplayLabel(label);
             setOpen(false);
           }
         },
@@ -43,6 +69,7 @@ function Select({ value, onValueChange, children, disabled }: SelectProps) {
         setOpen: (v: boolean) => {
           if (!disabled) setOpen(v);
         },
+        registerItem,
       }}
     >
       <div className="relative">{children}</div>
@@ -92,7 +119,11 @@ SelectTrigger.displayName = "SelectTrigger";
 
 function SelectValue({ placeholder }: { placeholder?: string }) {
   const ctx = React.useContext(SelectContext);
-  return <span>{ctx.value || placeholder || ""}</span>;
+  return (
+    <span className={!ctx.displayLabel && placeholder ? "text-muted-foreground" : ""}>
+      {ctx.displayLabel || placeholder || ""}
+    </span>
+  );
 }
 
 /* ── Content (dropdown) ────────────────────────────────── */
@@ -152,6 +183,24 @@ const SelectItem = React.forwardRef<HTMLDivElement, SelectItemProps>(
     const ctx = React.useContext(SelectContext);
     const isSelected = ctx.value === value;
 
+    // Extract text content for label registration
+    const textContent = React.useMemo(() => {
+      const extractText = (node: React.ReactNode): string => {
+        if (typeof node === "string" || typeof node === "number") return String(node);
+        if (Array.isArray(node)) return node.map(extractText).join("");
+        if (React.isValidElement(node) && node.props.children) {
+          return extractText(node.props.children);
+        }
+        return "";
+      };
+      return extractText(children);
+    }, [children]);
+
+    // Register this item's value → label mapping
+    React.useEffect(() => {
+      ctx.registerItem(value, textContent);
+    }, [value, textContent]);
+
     return (
       <div
         ref={ref}
@@ -162,7 +211,7 @@ const SelectItem = React.forwardRef<HTMLDivElement, SelectItemProps>(
           isSelected && "bg-accent text-accent-foreground font-medium",
           className,
         )}
-        onClick={() => ctx.onValueChange(value)}
+        onClick={() => ctx.onValueChange(value, textContent)}
         {...props}
       >
         {children}

@@ -12,6 +12,8 @@ import {
   Briefcase,
   PackagePlus,
   Truck,
+  Store,
+  ShoppingCart,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -31,7 +33,9 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
   { to: "/products", icon: Package, label: "Products" },
   { to: "/inbounds", icon: PackagePlus, label: "Inbounds" },
+  { to: "/sellers", icon: Store, label: "Sellers" },
   { to: "/outbounds", icon: Truck, label: "Outbounds" },
+  { to: "/buyers", icon: ShoppingCart, label: "Buyers" },
   { to: "/inventory", icon: ArrowLeftRight, label: "Inventory" },
   { to: "/customers", icon: Briefcase, label: "Customers", roles: ["warehouse_admin", "warehouse_staff"] },
   { to: "/warehouses", icon: WarehouseIcon, label: "Warehouses", roles: ["warehouse_admin", "warehouse_staff"] },

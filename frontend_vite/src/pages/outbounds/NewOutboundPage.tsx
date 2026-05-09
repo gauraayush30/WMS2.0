@@ -29,6 +29,19 @@ interface Customer {
   name: string;
 }
 
+interface Buyer {
+  id: number;
+  name: string;
+  gstin: string;
+}
+
+interface BuyerLocation {
+  id: number;
+  name: string;
+  city: string;
+  state: string;
+}
+
 interface LineForm {
   product_id: number | "";
   requested_qty: number;
@@ -52,6 +65,13 @@ export default function NewOutboundPage() {
     effectiveCustomerId ?? "",
   );
   const [products, setProducts] = useState<ProductLite[]>([]);
+
+  /* Buyer + location state */
+  const [buyers, setBuyers] = useState<Buyer[]>([]);
+  const [buyerId, setBuyerId] = useState<number | "">("");
+  const [buyerLocations, setBuyerLocations] = useState<BuyerLocation[]>([]);
+  const [buyerLocationId, setBuyerLocationId] = useState<number | "">("");
+
   const [strategy, setStrategy] = useState<"" | "FIFO" | "FEFO" | "manual">("");
   const [soNumber, setSoNumber] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
@@ -60,6 +80,7 @@ export default function NewOutboundPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  /* Fetch customers */
   useEffect(() => {
     if (!isWarehouse) return;
     authFetch(`${API}/customers`)
@@ -67,8 +88,38 @@ export default function NewOutboundPage() {
       .then((d) => setCustomers(d.customers || []));
   }, [authFetch, isWarehouse]);
 
+  /* Fetch buyers when customer changes */
   useEffect(() => {
-    const params = new URLSearchParams({ per_page: "200" });
+    if (!customerId) {
+      setBuyers([]);
+      setBuyerId("");
+      return;
+    }
+    const params = new URLSearchParams({ customer_id: String(customerId) });
+    authFetch(`${API}/buyers?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : { buyers: [] }))
+      .then((d) => setBuyers(d.buyers || []));
+    setBuyerId("");
+    setBuyerLocations([]);
+    setBuyerLocationId("");
+  }, [authFetch, customerId]);
+
+  /* Fetch buyer locations when buyer changes */
+  useEffect(() => {
+    if (!buyerId) {
+      setBuyerLocations([]);
+      setBuyerLocationId("");
+      return;
+    }
+    authFetch(`${API}/buyers/${buyerId}/locations`)
+      .then((r) => (r.ok ? r.json() : { locations: [] }))
+      .then((d) => setBuyerLocations(d.locations || []));
+    setBuyerLocationId("");
+  }, [authFetch, buyerId]);
+
+  /* Fetch products */
+  useEffect(() => {
+    const params = new URLSearchParams({ per_page: "50" });
     if (customerId) params.set("customer_id", String(customerId));
     authFetch(`${API}/products?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : { products: [] }))
@@ -93,6 +144,10 @@ export default function NewOutboundPage() {
       setError("Select a customer for this outbound");
       return;
     }
+    if (!buyerId) {
+      setError("Select a buyer for this outbound");
+      return;
+    }
     if (lines.some((l) => !l.product_id || l.requested_qty <= 0)) {
       setError("Each line needs a product and a positive quantity");
       return;
@@ -102,6 +157,8 @@ export default function NewOutboundPage() {
       method: "POST",
       body: JSON.stringify({
         customer_id: customerId || undefined,
+        buyer_id: buyerId || undefined,
+        delivery_location_id: buyerLocationId || undefined,
         so_number: soNumber,
         invoice_number: invoiceNumber,
         notes,
@@ -159,6 +216,49 @@ export default function NewOutboundPage() {
                 </Select>
               </div>
             )}
+
+            {/* Buyer dropdown */}
+            <div>
+              <Label>Buyer</Label>
+              <Select
+                value={buyerId === "" ? "" : String(buyerId)}
+                onValueChange={(v) => setBuyerId(Number(v))}
+                disabled={buyers.length === 0}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={buyers.length === 0 ? "No buyers available" : "Select buyer"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {buyers.map((b) => (
+                    <SelectItem key={b.id} value={String(b.id)}>
+                      {b.name}{b.gstin ? ` (${b.gstin})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Buyer location dropdown */}
+            <div>
+              <Label>Buyer Location</Label>
+              <Select
+                value={buyerLocationId === "" ? "" : String(buyerLocationId)}
+                onValueChange={(v) => setBuyerLocationId(Number(v))}
+                disabled={buyerLocations.length === 0}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={!buyerId ? "Select buyer first" : buyerLocations.length === 0 ? "No locations" : "Select location"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {buyerLocations.map((loc) => (
+                    <SelectItem key={loc.id} value={String(loc.id)}>
+                      {loc.name}{loc.city ? `, ${loc.city}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div>
               <Label>SO Number</Label>
               <Input value={soNumber} onChange={(e) => setSoNumber(e.target.value)} />

@@ -25,6 +25,8 @@ from routes.customers import router as customers_router
 from routes.inbounds import router as inbounds_router
 from routes.outbounds import router as outbounds_router
 from routes.analytics import router as analytics_router
+from routes.buyers import router as buyers_router
+from routes.sellers import router as sellers_router
 
 
 @asynccontextmanager
@@ -65,3 +67,5 @@ app.include_router(customers_router)
 app.include_router(inbounds_router)
 app.include_router(outbounds_router)
 app.include_router(analytics_router)
+app.include_router(buyers_router)
+app.include_router(sellers_router)

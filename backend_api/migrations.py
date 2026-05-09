@@ -847,6 +847,53 @@ def create_outbound_tables() -> None:
     print("[migrations] outbound_orders / outbound_lines / outbound_picks ready.")
 
 
+def create_buyer_locations_table() -> None:
+    """Multiple locations per buyer."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS buyer_locations (
+            id              SERIAL PRIMARY KEY,
+            buyer_id        INTEGER NOT NULL REFERENCES buyers(id) ON DELETE CASCADE,
+            business_id     INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            name            VARCHAR(255) NOT NULL,
+            address         TEXT NOT NULL DEFAULT '',
+            city            VARCHAR(255) NOT NULL DEFAULT '',
+            state           VARCHAR(255) NOT NULL DEFAULT '',
+            zip_code        VARCHAR(50) NOT NULL DEFAULT '',
+            contact_person  VARCHAR(255) NOT NULL DEFAULT '',
+            contact_phone   VARCHAR(50) NOT NULL DEFAULT '',
+            is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] buyer_locations table is ready.")
+
+
+def create_seller_locations_table() -> None:
+    """Multiple locations per seller (supplier)."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS seller_locations (
+            id              SERIAL PRIMARY KEY,
+            supplier_id     INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+            business_id     INTEGER NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            name            VARCHAR(255) NOT NULL,
+            address         TEXT NOT NULL DEFAULT '',
+            city            VARCHAR(255) NOT NULL DEFAULT '',
+            state           VARCHAR(255) NOT NULL DEFAULT '',
+            zip_code        VARCHAR(50) NOT NULL DEFAULT '',
+            contact_person  VARCHAR(255) NOT NULL DEFAULT '',
+            contact_phone   VARCHAR(50) NOT NULL DEFAULT '',
+            is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] seller_locations table is ready.")
+
+
+
 def run_all() -> None:
     """Run all migrations in dependency order."""
     create_businesses_table()
@@ -885,5 +932,9 @@ def run_all() -> None:
     create_buyers_table()
     create_inbound_tables()
     create_outbound_tables()
+
+    # ── v7: buyer/seller locations ───────────────────────────────────────────
+    create_buyer_locations_table()
+    create_seller_locations_table()
 
     print("[migrations] All migrations complete.")

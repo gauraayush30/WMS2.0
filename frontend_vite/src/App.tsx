@@ -23,6 +23,8 @@ import ViewInboundPage from "./pages/inbounds/ViewInboundPage";
 import OutboundsPage from "./pages/outbounds/OutboundsPage";
 import NewOutboundPage from "./pages/outbounds/NewOutboundPage";
 import ViewOutboundPage from "./pages/outbounds/ViewOutboundPage";
+import BuyersPage from "./pages/buyers/BuyersPage";
+import SellersPage from "./pages/sellers/SellersPage";
 import UsersPage from "./pages/UsersPage";
 import ReportsPage from "./pages/ReportsPage";
 import FastSlowMovingPage from "./pages/reports/FastSlowMovingPage";
@@ -80,6 +82,8 @@ function AppInner() {
           <Route path="/outbounds" element={<OutboundsPage />} />
           <Route path="/outbounds/new" element={<NewOutboundPage />} />
           <Route path="/outbounds/:id" element={<ViewOutboundPage />} />
+          <Route path="/buyers" element={<BuyersPage />} />
+          <Route path="/sellers" element={<SellersPage />} />
           <Route path="/business" element={<BusinessPage />} />
           <Route path="/business/details" element={<BusinessDetailsPage />} />
           <Route path="/business/invites" element={<InvitesPage />} />
