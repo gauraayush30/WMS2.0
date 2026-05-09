@@ -181,9 +181,16 @@ async def forecast_upload_history(
 
 @router.post("/train")
 async def forecast_train(product_id: int, user_id: int = Depends(get_current_user_id)):
-    """Trigger on-demand model training for a product."""
+    """Start async model training (returns 200 immediately; poll /train-progress)."""
     uid, biz_id = _get_user_context(user_id)
     return await _proxy_post(f"/train/{product_id}", biz_id, uid)
+
+
+@router.get("/train-progress")
+async def forecast_train_progress(product_id: int, user_id: int = Depends(get_current_user_id)):
+    """Poll training progress: phase, cv steps, elapsed time."""
+    _, biz_id = _get_user_context(user_id)
+    return await _proxy_get(f"/train-progress/{product_id}", biz_id)
 
 
 @router.get("/predict")

@@ -8,6 +8,9 @@ from the auth token before forwarding.
 
 from __future__ import annotations
 
+import threading
+import time
+
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 
 from db import (
@@ -15,6 +18,7 @@ from db import (
     get_daily_aggregated_transactions,
     get_uploaded_history,
     get_model_metadata,
+    get_product_tenant_ids,
     save_uploaded_history,
     delete_model_metadata,
     delete_uploaded_history,
@@ -31,6 +35,65 @@ from fastapi.responses import StreamingResponse
 import io
 
 router = APIRouter(tags=["ML"])
+
+# ── In-memory training state ─────────────────────────────────────────────────
+# key: f"{product_id}_{business_id}"
+_training_state: dict[str, dict] = {}
+_training_lock = threading.Lock()
+
+
+def _run_training_bg(product_id: int, business_id: int, key: str) -> None:
+    """Background thread target: runs train_model and updates _training_state."""
+    started_at = time.time()
+    with _training_lock:
+        _training_state[key] = {
+            "status": "training",
+            "phase": "initializing",
+            "phase_detail": "",
+            "cv_done": 0,
+            "cv_total": 0,
+            "started_at": started_at,
+            "result": None,
+            "error": None,
+        }
+
+    def _progress(phase: str, cv_done: int = 0, cv_total: int = 0, detail: str = "") -> None:
+        with _training_lock:
+            if key in _training_state:
+                _training_state[key].update({
+                    "phase": phase,
+                    "phase_detail": detail,
+                    "cv_done": cv_done,
+                    "cv_total": cv_total,
+                })
+
+    try:
+        result = train_model(product_id, business_id, progress_callback=_progress)
+        with _training_lock:
+            _training_state[key] = {
+                "status": "ready",
+                "phase": "done",
+                "phase_detail": "",
+                "cv_done": 0,
+                "cv_total": 0,
+                "started_at": started_at,
+                "elapsed_seconds": round(time.time() - started_at, 1),
+                "result": result,
+                "error": None,
+            }
+    except Exception as exc:
+        with _training_lock:
+            _training_state[key] = {
+                "status": "failed",
+                "phase": "failed",
+                "phase_detail": str(exc),
+                "cv_done": 0,
+                "cv_total": 0,
+                "started_at": started_at,
+                "elapsed_seconds": round(time.time() - started_at, 1),
+                "result": None,
+                "error": str(exc),
+            }
 
 
 # ── CSV Template Download ────────────────────────────────────────────────────
@@ -81,7 +144,12 @@ async def upload_history(
     if errors:
         raise HTTPException(status_code=422, detail={"validation_errors": errors})
 
-    n_rows = save_uploaded_history(product_id, business_id, user_id, df)
+    # Resolve customer_id from the product (authoritative source)
+    tenant = get_product_tenant_ids(product_id, business_id)
+    n_rows = save_uploaded_history(
+        product_id, business_id, user_id, df,
+        customer_id=tenant["customer_id"],
+    )
 
     return {
         "message": f"Successfully uploaded {n_rows} rows of historical data",
@@ -100,16 +168,73 @@ def train_product_model(
     product_id: int,
     business_id: int = Query(...),
 ):
-    """Trigger on-demand model training for a product."""
+    """Start async model training in a background thread. Returns 202 immediately."""
     product = get_product_info(product_id, business_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    try:
-        result = train_model(product_id, business_id)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    key = f"{product_id}_{business_id}"
+    with _training_lock:
+        current = _training_state.get(key, {})
+        if current.get("status") == "training":
+            elapsed = round(time.time() - current.get("started_at", time.time()), 1)
+            return {
+                "status": "training",
+                "message": "Training already in progress",
+                "elapsed_seconds": elapsed,
+            }
+
+    t = threading.Thread(
+        target=_run_training_bg,
+        args=(product_id, business_id, key),
+        daemon=True,
+    )
+    t.start()
+    return {"status": "training", "message": "Training started"}
+
+
+# ── Training Progress ────────────────────────────────────────────────────────
+
+@router.get("/train-progress/{product_id}")
+def train_progress(
+    product_id: int,
+    business_id: int = Query(...),
+):
+    """Poll training progress. Returns phase, cv steps, elapsed time."""
+    key = f"{product_id}_{business_id}"
+    with _training_lock:
+        state = dict(_training_state.get(key, {}))
+
+    if not state:
+        # No in-memory record — check the DB for a persisted status
+        meta = get_model_metadata(product_id, business_id)
+        return {
+            "status": meta.get("status", "idle") if meta else "idle",
+            "phase": "idle",
+            "phase_detail": "",
+            "cv_done": 0,
+            "cv_total": 0,
+            "elapsed_seconds": 0.0,
+            "result": None,
+            "error": None,
+        }
+
+    elapsed = (
+        round(time.time() - state["started_at"], 1)
+        if state.get("status") == "training"
+        else state.get("elapsed_seconds", 0.0)
+    )
+
+    return {
+        "status": state["status"],
+        "phase": state.get("phase", ""),
+        "phase_detail": state.get("phase_detail", ""),
+        "cv_done": state.get("cv_done", 0),
+        "cv_total": state.get("cv_total", 0),
+        "elapsed_seconds": elapsed,
+        "result": state.get("result"),
+        "error": state.get("error"),
+    }
 
 
 # ── Predict ──────────────────────────────────────────────────────────────────
@@ -170,8 +295,16 @@ def training_data_preview(
     business_id: int = Query(...),
 ):
     """Preview available training data (auto-aggregated + uploaded counts)."""
-    auto_df = get_daily_aggregated_transactions(product_id, business_id)
-    uploaded_df = get_uploaded_history(product_id, business_id)
+    # Resolve customer_id for tenant-scoped queries
+    tenant = get_product_tenant_ids(product_id, business_id)
+    customer_id = tenant["customer_id"]
+
+    auto_df = get_daily_aggregated_transactions(
+        product_id, business_id, customer_id=customer_id,
+    )
+    uploaded_df = get_uploaded_history(
+        product_id, business_id, customer_id=customer_id,
+    )
 
     auto_days = len(auto_df)
     uploaded_days = len(uploaded_df)
@@ -302,8 +435,14 @@ def delete_model_endpoint(
     business_id: int = Query(...),
 ):
     """Delete a trained model (to retrain from scratch)."""
+    # Resolve customer_id for tenant-scoped operations
+    tenant = get_product_tenant_ids(product_id, business_id)
+    customer_id = tenant["customer_id"]
+
     file_deleted = delete_model_file(product_id, business_id)
-    meta_deleted = delete_model_metadata(product_id, business_id)
+    meta_deleted = delete_model_metadata(
+        product_id, business_id, customer_id=customer_id,
+    )
 
     if not file_deleted and not meta_deleted:
         raise HTTPException(status_code=404, detail="No model found for this product")

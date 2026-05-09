@@ -158,11 +158,41 @@ def get_current_stock(product_id: int, business_id: int) -> int:
     return int(row[0]) if row else 0
 
 
+def get_product_tenant_ids(product_id: int, business_id: int) -> dict:
+    """
+    Resolve the multi-tenant IDs (customer_id, warehouse_id) for a product.
+
+    Every product belongs to exactly one customer and one warehouse.
+    This is the authoritative source for tenancy — callers should never
+    need to guess or accept these values from the API.
+
+    Returns ``{"customer_id": int, "warehouse_id": int}`` or raises ValueError.
+    """
+    query = text("""
+        SELECT customer_id, warehouse_id
+        FROM products
+        WHERE id = :product_id AND business_id = :business_id
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(
+            query, {"product_id": product_id, "business_id": business_id}
+        ).mappings().fetchone()
+    if not row or row["customer_id"] is None:
+        raise ValueError(
+            f"Cannot resolve tenant IDs for product {product_id} / "
+            f"business {business_id}. Ensure the product exists and has "
+            f"customer_id set."
+        )
+    return {"customer_id": int(row["customer_id"]), "warehouse_id": int(row["warehouse_id"])}
+
+
 def save_uploaded_history(
     product_id: int,
     business_id: int,
     uploaded_by: int,
     df: pd.DataFrame,
+    customer_id: int | None = None,
+    warehouse_id: int | None = None,
 ) -> int:
     """
     Upsert rows from a validated CSV upload into ``ml_uploaded_history``.
@@ -170,14 +200,23 @@ def save_uploaded_history(
     ``df`` must have columns: date, inbound_qty, outbound_qty
     Optional columns: stock_level, notes
 
+    If ``customer_id`` / ``warehouse_id`` are not provided they are
+    resolved from the product.
     Returns the number of rows upserted.
     """
+    if customer_id is None or warehouse_id is None:
+        tenant = get_product_tenant_ids(product_id, business_id)
+        customer_id = customer_id or tenant["customer_id"]
+        warehouse_id = warehouse_id or tenant["warehouse_id"]
+
     upsert = text("""
         INSERT INTO ml_uploaded_history
-            (product_id, business_id, uploaded_by, date,
+            (product_id, business_id, customer_id, warehouse_id,
+             uploaded_by, date,
              inbound_qty, outbound_qty, stock_level, notes)
         VALUES
-            (:product_id, :business_id, :uploaded_by, :date,
+            (:product_id, :business_id, :customer_id, :warehouse_id,
+             :uploaded_by, :date,
              :inbound_qty, :outbound_qty, :stock_level, :notes)
         ON CONFLICT (product_id, business_id, date)
         DO UPDATE SET
@@ -193,6 +232,8 @@ def save_uploaded_history(
         params.append({
             "product_id": product_id,
             "business_id": business_id,
+            "customer_id": customer_id,
+            "warehouse_id": warehouse_id,
             "uploaded_by": uploaded_by,
             "date": row["date"],
             "inbound_qty": int(row.get("inbound_qty", 0)),
@@ -217,20 +258,35 @@ def save_model_metadata(
     cv_mae: float,
     cv_mape: float,
     features_used: list[str],
+    customer_id: int | None = None,
+    warehouse_id: int | None = None,
 ) -> dict:
-    """Upsert model metadata after training."""
+    """Upsert model metadata after training.
+
+    If ``customer_id`` / ``warehouse_id`` are not provided they are
+    resolved from the product.
+    """
+    if customer_id is None or warehouse_id is None:
+        tenant = get_product_tenant_ids(product_id, business_id)
+        customer_id = customer_id or tenant["customer_id"]
+        warehouse_id = warehouse_id or tenant["warehouse_id"]
+
     upsert = text("""
         INSERT INTO ml_model_metadata
-            (product_id, business_id, model_path, trained_at,
+            (product_id, business_id, customer_id, warehouse_id,
+             model_path, trained_at,
              data_start_date, data_end_date, total_data_points,
              cv_mae, cv_mape, features_used, status)
         VALUES
-            (:product_id, :business_id, :model_path, NOW(),
+            (:product_id, :business_id, :customer_id, :warehouse_id,
+             :model_path, NOW(),
              :data_start, :data_end, :total_points,
              :cv_mae, :cv_mape, :features_used, 'ready')
         ON CONFLICT (product_id, business_id)
         DO UPDATE SET
             model_path       = EXCLUDED.model_path,
+            customer_id      = EXCLUDED.customer_id,
+            warehouse_id     = EXCLUDED.warehouse_id,
             trained_at       = NOW(),
             data_start_date  = EXCLUDED.data_start_date,
             data_end_date    = EXCLUDED.data_end_date,
@@ -245,6 +301,8 @@ def save_model_metadata(
         row = conn.execute(upsert, {
             "product_id": product_id,
             "business_id": business_id,
+            "customer_id": customer_id,
+            "warehouse_id": warehouse_id,
             "model_path": model_path,
             "data_start": data_start,
             "data_end": data_end,
@@ -256,69 +314,94 @@ def save_model_metadata(
     return dict(row) if row else {}
 
 
-def get_model_metadata(product_id: int, business_id: int) -> dict | None:
+def get_model_metadata(
+    product_id: int, business_id: int, customer_id: int | None = None,
+) -> dict | None:
     """Return model metadata for a product, or None."""
-    query = text("""
+    where = ["product_id = :product_id", "business_id = :business_id"]
+    params: dict = {"product_id": product_id, "business_id": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :customer_id")
+        params["customer_id"] = customer_id
+
+    query = text(f"""
         SELECT * FROM ml_model_metadata
-        WHERE product_id = :product_id AND business_id = :business_id
+        WHERE {' AND '.join(where)}
     """)
     try:
         with engine.connect() as conn:
-            row = conn.execute(
-                query, {"product_id": product_id, "business_id": business_id}
-            ).mappings().fetchone()
+            row = conn.execute(query, params).mappings().fetchone()
         return dict(row) if row else None
     except Exception:
         return None
 
 
-def update_model_status(product_id: int, business_id: int, status: str) -> None:
+def update_model_status(
+    product_id: int, business_id: int, status: str,
+    customer_id: int | None = None,
+) -> None:
     """Set model status (training / ready / failed)."""
-    query = text("""
+    where = ["product_id = :product_id", "business_id = :business_id"]
+    params: dict = {
+        "product_id": product_id,
+        "business_id": business_id,
+        "status": status,
+    }
+    if customer_id is not None:
+        where.append("customer_id = :customer_id")
+        params["customer_id"] = customer_id
+
+    query = text(f"""
         UPDATE ml_model_metadata
         SET status = :status
-        WHERE product_id = :product_id AND business_id = :business_id
+        WHERE {' AND '.join(where)}
     """)
     try:
         with engine.begin() as conn:
-            conn.execute(query, {
-                "product_id": product_id,
-                "business_id": business_id,
-                "status": status,
-            })
+            conn.execute(query, params)
     except Exception:
         pass
 
 
-def delete_model_metadata(product_id: int, business_id: int) -> bool:
+def delete_model_metadata(
+    product_id: int, business_id: int, customer_id: int | None = None,
+) -> bool:
     """Delete model metadata row. Returns True if a row was deleted."""
-    query = text("""
+    where = ["product_id = :product_id", "business_id = :business_id"]
+    params: dict = {"product_id": product_id, "business_id": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :customer_id")
+        params["customer_id"] = customer_id
+
+    query = text(f"""
         DELETE FROM ml_model_metadata
-        WHERE product_id = :product_id AND business_id = :business_id
+        WHERE {' AND '.join(where)}
     """)
     try:
         with engine.begin() as conn:
-            result = conn.execute(query, {
-                "product_id": product_id,
-                "business_id": business_id,
-            })
+            result = conn.execute(query, params)
         return result.rowcount > 0
     except Exception:
         return False
 
 
-def delete_uploaded_history(product_id: int, business_id: int) -> int:
+def delete_uploaded_history(
+    product_id: int, business_id: int, customer_id: int | None = None,
+) -> int:
     """Delete all uploaded history for a product. Returns rows deleted."""
-    query = text("""
+    where = ["product_id = :product_id", "business_id = :business_id"]
+    params: dict = {"product_id": product_id, "business_id": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :customer_id")
+        params["customer_id"] = customer_id
+
+    query = text(f"""
         DELETE FROM ml_uploaded_history
-        WHERE product_id = :product_id AND business_id = :business_id
+        WHERE {' AND '.join(where)}
     """)
     try:
         with engine.begin() as conn:
-            result = conn.execute(query, {
-                "product_id": product_id,
-                "business_id": business_id,
-            })
+            result = conn.execute(query, params)
         return result.rowcount
     except Exception:
         return 0

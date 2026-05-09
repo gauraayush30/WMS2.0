@@ -38,7 +38,6 @@ def fast_slow_moving_report(
     movement distribution within the business (top 25% = fast, bottom
     25% = slow, zero movement = non-moving).
     """
-    """
     cust = ctx.resolve_customer_filter(customer_id)
     where_t = ["t.business_id = :biz", "t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)"]
     where_m = ["m.business_id = :biz", "m.date >= (CURRENT_DATE - MAKE_INTERVAL(days => :days))"]
@@ -150,7 +149,6 @@ def inbound_outbound_report(
       - Top 5 products by total outbound
       - Product list (for search dropdown)
       - Daily inbound/outbound time-series (all products or a specific one)
-    """
     """
     cust = ctx.resolve_customer_filter(customer_id)
     where_t = ["t.business_id = :biz", "t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)"]
@@ -272,7 +270,6 @@ def inbound_details_report(
     """
     Shows stock in / inbound details: seller, location, product, qty, price, batchno.
     """
-    """
     cust = ctx.resolve_customer_filter(customer_id)
     return {"days": days, "items": get_inbound_report_details(ctx.business_id, days, cust)}
 
@@ -285,7 +282,6 @@ def outbound_details_report(
 ):
     """
     Shows stock out / outbound details: buyer, location, product, qty, price, batchno.
-    """
     """
     cust = ctx.resolve_customer_filter(customer_id)
     return {"days": days, "items": get_outbound_report_details(ctx.business_id, days, cust)}

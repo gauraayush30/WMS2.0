@@ -82,6 +82,56 @@ interface PredictionResult {
   predictions: PredictionDay[];
 }
 
+interface TrainingProgress {
+  status: string;
+  phase: string;
+  phase_detail: string;
+  cv_done: number;
+  cv_total: number;
+  elapsed_seconds: number;
+  result: Record<string, number> | null;
+  error: string | null;
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  initializing: "Initializing…",
+  loading_data: "Loading training data…",
+  building_features: "Building feature matrix…",
+  cross_validation: "Cross-validation…",
+  final_training: "Training final model…",
+  saving: "Saving model…",
+  done: "Complete",
+  failed: "Failed",
+};
+
+function phaseProgress(p: TrainingProgress): number {
+  switch (p.phase) {
+    case "initializing":
+      return 3;
+    case "loading_data":
+      return 8;
+    case "building_features":
+      return 15;
+    case "cross_validation":
+      if (p.cv_total > 0)
+        return Math.round(15 + (p.cv_done / p.cv_total) * 70);
+      return 20;
+    case "final_training":
+      return 87;
+    case "saving":
+      return 96;
+    case "done":
+      return 100;
+    default:
+      return 5;
+  }
+}
+
+function formatElapsed(sec: number): string {
+  if (sec < 60) return `${Math.floor(sec)}s`;
+  return `${Math.floor(sec / 60)}m ${Math.floor(sec % 60)}s`;
+}
+
 export default function DemandForecastTab({
   productId,
 }: {
@@ -104,6 +154,8 @@ export default function DemandForecastTab({
     type: "success" | "destructive" | "warning";
     text: string;
   } | null>(null);
+  const [trainingProgress, setTrainingProgress] =
+    useState<TrainingProgress | null>(null);
 
   const base = `${API}/products/${productId}/forecast`;
 
@@ -125,24 +177,52 @@ export default function DemandForecastTab({
     fetchStatus().finally(() => setLoading(false));
   }, [fetchStatus]);
 
+  const pollProgress = useCallback(async () => {
+    try {
+      const res = await authFetch(`${base}/train-progress`);
+      if (!res.ok) return;
+      const data: TrainingProgress = await res.json();
+      setTrainingProgress(data);
+      if (data.status === "ready") {
+        setTraining(false);
+        setMsg({
+          type: "success",
+          text: `Model trained! MAE: ${data.result?.cv_mae?.toFixed(1)}, MAPE: ${data.result?.cv_mape?.toFixed(1)}%`,
+        });
+        await fetchStatus();
+      } else if (data.status === "failed") {
+        setTraining(false);
+        setMsg({
+          type: "destructive",
+          text: data.error || "Training failed",
+        });
+      }
+    } catch {
+      /* ignore transient poll errors */
+    }
+  }, [authFetch, base, fetchStatus]);
+
+  useEffect(() => {
+    if (!training) return;
+    const id = setInterval(pollProgress, 3000);
+    return () => clearInterval(id);
+  }, [training, pollProgress]);
+
   const handleTrain = async () => {
     setTraining(true);
+    setTrainingProgress(null);
     setMsg(null);
     try {
       const res = await authFetch(`${base}/train`, { method: "POST" });
-      const data = await res.json();
       if (!res.ok) {
+        const data = await res.json();
         setMsg({ type: "destructive", text: data.detail || "Training failed" });
+        setTraining(false);
         return;
       }
-      setMsg({
-        type: "success",
-        text: `Model trained! MAE: ${data.cv_mae?.toFixed(1)}, MAPE: ${data.cv_mape?.toFixed(1)}%`,
-      });
-      await fetchStatus();
+      // Training started in background — polling loop takes over
     } catch {
       setMsg({ type: "destructive", text: "Training request failed" });
-    } finally {
       setTraining(false);
     }
   };
@@ -399,12 +479,80 @@ export default function DemandForecastTab({
             </Card>
           </div>
 
+          {/* Training Progress Card */}
+          <AnimatePresence>
+            {training && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                className="mt-4"
+              >
+                <Card className="border-primary/20 bg-primary/5">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <RefreshCw
+                          size={14}
+                          className="animate-spin text-primary"
+                        />
+                        <span className="text-sm font-medium">
+                          {trainingProgress
+                            ? (PHASE_LABELS[trainingProgress.phase] ??
+                              "Training…")
+                            : "Starting…"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {trainingProgress && (
+                          <span className="text-xs text-muted-foreground">
+                            {formatElapsed(trainingProgress.elapsed_seconds)}{" "}
+                            elapsed
+                          </span>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={pollProgress}
+                        >
+                          <RefreshCw size={12} className="mr-1" /> Refresh
+                        </Button>
+                      </div>
+                    </div>
+
+                    <Progress
+                      value={
+                        trainingProgress ? phaseProgress(trainingProgress) : 3
+                      }
+                      className="h-2"
+                    />
+
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>
+                        {trainingProgress?.phase === "cross_validation" &&
+                        trainingProgress.cv_total > 0
+                          ? `Fold ${trainingProgress.cv_done} / ${trainingProgress.cv_total} — ${trainingProgress.phase_detail}`
+                          : (trainingProgress?.phase_detail ?? "")}
+                      </span>
+                      <span>
+                        {trainingProgress
+                          ? `${phaseProgress(trainingProgress)}%`
+                          : ""}
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* Action Buttons */}
           <div className="flex flex-wrap gap-3 mt-4">
             <Button onClick={handleTrain} disabled={training}>
               {training ? (
                 <>
-                  <RefreshCw size={14} className="animate-spin" /> Training...
+                  <RefreshCw size={14} className="animate-spin" /> Training…
                 </>
               ) : (
                 <>
@@ -446,7 +594,7 @@ export default function DemandForecastTab({
             </div>
           </div>
 
-          {status?.has_model && (
+          {status?.has_model && !training && (
             <div className="flex justify-end mt-2">
               <Button
                 variant="ghost"

@@ -31,6 +31,7 @@ from config import MODEL_STORAGE_PATH, MIN_TRAINING_DAYS
 from db import (
     get_daily_aggregated_transactions,
     get_uploaded_history,
+    get_product_tenant_ids,
     save_model_metadata,
     update_model_status,
 )
@@ -355,7 +356,11 @@ def _compute_inbound_stats(daily_df: pd.DataFrame) -> dict:
     }
 
 
-def train_model(product_id: int, business_id: int) -> dict:
+def train_model(
+    product_id: int,
+    business_id: int,
+    progress_callback=None,
+) -> dict:
     """
     Train (or re-train) a demand prediction model for a single product.
 
@@ -364,14 +369,32 @@ def train_model(product_id: int, business_id: int) -> dict:
 
     Returns a dict with training metrics and metadata.
     Raises ValueError if insufficient data.
+
+    progress_callback(phase, cv_done, cv_total, detail) is called at key stages.
     """
+    def _progress(phase: str, cv_done: int = 0, cv_total: int = 0, detail: str = ""):
+        if progress_callback:
+            try:
+                progress_callback(phase, cv_done, cv_total, detail)
+            except Exception:
+                pass
+
+    # Resolve tenant IDs from the product itself (authoritative source)
+    tenant = get_product_tenant_ids(product_id, business_id)
+    customer_id = tenant["customer_id"]
+
     # Mark status as training
-    update_model_status(product_id, business_id, "training")
+    update_model_status(product_id, business_id, "training", customer_id=customer_id)
 
     try:
         # ── 1. Gather data ───────────────────────────────────────────
-        auto_df = get_daily_aggregated_transactions(product_id, business_id)
-        uploaded_df = get_uploaded_history(product_id, business_id)
+        _progress("loading_data")
+        auto_df = get_daily_aggregated_transactions(
+            product_id, business_id, customer_id=customer_id,
+        )
+        uploaded_df = get_uploaded_history(
+            product_id, business_id, customer_id=customer_id,
+        )
         combined = _merge_data_sources(auto_df, uploaded_df)
 
         if combined.empty:
@@ -390,6 +413,7 @@ def train_model(product_id: int, business_id: int) -> dict:
             )
 
         # ── 2. Build features ────────────────────────────────────────
+        _progress("building_features", detail=f"{n_days} days")
         X, y_outbound, y_inbound = build_feature_matrix(combined)
         n_samples = len(X)
         logger.info(
@@ -414,6 +438,9 @@ def train_model(product_id: int, business_id: int) -> dict:
         # Gap prevents lag-feature contamination between train/test folds
         cv_gap = min(7, n_samples // (n_splits * 4))
         tscv = TimeSeriesSplit(n_splits=n_splits, gap=cv_gap)
+
+        cv_total_steps = len(candidates) * n_splits
+        cv_done = 0
 
         best_overall_mae = float("inf")
         best_config_idx = 0
@@ -455,6 +482,13 @@ def train_model(product_id: int, business_id: int) -> dict:
 
                 mae = mean_absolute_error(y_test_actual, preds)
                 cv_maes.append(mae)
+                cv_done += 1
+                _progress(
+                    "cross_validation",
+                    cv_done=cv_done,
+                    cv_total=cv_total_steps,
+                    detail=f"{config['name']} fold {fold_i + 1}/{n_splits}",
+                )
 
                 # Weighted MAPE (avoids zero-division blow-up)
                 total_actual = y_test_actual.sum()
@@ -497,6 +531,7 @@ def train_model(product_id: int, business_id: int) -> dict:
         )
 
         # ── 5. Retrain on full data with best config ─────────────────
+        _progress("final_training", detail=best_config["name"])
         final_params = dict(best_config["params"])
 
         # Use averaged best iteration from CV (+10 % buffer) for XGBoost
@@ -544,6 +579,7 @@ def train_model(product_id: int, business_id: int) -> dict:
         )
 
         # ── 8. Persist model ─────────────────────────────────────────
+        _progress("saving")
         model_path = _get_model_path(product_id, business_id)
         artifact = {
             "model": outbound_model,
@@ -568,6 +604,7 @@ def train_model(product_id: int, business_id: int) -> dict:
             cv_mae=avg_mae,
             cv_mape=avg_mape,
             features_used=ALL_FEATURES,
+            customer_id=customer_id,
         )
 
         return {
@@ -598,10 +635,10 @@ def train_model(product_id: int, business_id: int) -> dict:
         }
 
     except ValueError:
-        update_model_status(product_id, business_id, "failed")
+        update_model_status(product_id, business_id, "failed", customer_id=customer_id)
         raise
     except Exception as e:
-        update_model_status(product_id, business_id, "failed")
+        update_model_status(product_id, business_id, "failed", customer_id=customer_id)
         raise ValueError(f"Training failed: {str(e)}")
 
 

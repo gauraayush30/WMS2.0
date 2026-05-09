@@ -17,6 +17,7 @@ from db import (
     get_daily_aggregated_transactions,
     get_uploaded_history,
     get_model_metadata,
+    get_product_tenant_ids,
 )
 from features import build_prediction_features, ALL_FEATURES
 from indian_calendar import get_all_holiday_name
@@ -54,6 +55,10 @@ def predict_demand(
 
     Raises ValueError if no trained model exists.
     """
+    # ── Resolve tenancy ───────────────────────────────────────────
+    tenant = get_product_tenant_ids(product_id, business_id)
+    customer_id = tenant["customer_id"]
+
     # ── Load model ───────────────────────────────────────────────
     artifact = load_model(product_id, business_id)
     if artifact is None:
@@ -68,8 +73,12 @@ def predict_demand(
     meta = get_model_metadata(product_id, business_id)
 
     # ── Gather recent actuals for lag features ───────────────────
-    auto_df = get_daily_aggregated_transactions(product_id, business_id)
-    uploaded_df = get_uploaded_history(product_id, business_id)
+    auto_df = get_daily_aggregated_transactions(
+        product_id, business_id, customer_id=customer_id,
+    )
+    uploaded_df = get_uploaded_history(
+        product_id, business_id, customer_id=customer_id,
+    )
 
     # Merge both sources (same logic as training) so uploaded history
     # is not silently discarded when auto data exists.
