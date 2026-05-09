@@ -3371,11 +3371,14 @@ def get_inbound_order(inbound_id: int, business_id: int,
         if not head:
             return None
         lines = conn.execute(text("""
-            SELECT id, product_id, expected_qty, received_qty, rejected_qty,
-                   unit_cost, line_amount, tax_pct, discount_pct, batch_code,
-                   manufactured_at, expires_at, stock_batch_id, transaction_id, notes
-            FROM inbound_lines WHERE inbound_id = :iid
-            ORDER BY id
+            SELECT il.id, il.product_id, il.expected_qty, il.received_qty, il.rejected_qty,
+                   il.unit_cost, il.line_amount, il.tax_pct, il.discount_pct, il.batch_code,
+                   il.manufactured_at, il.expires_at, il.stock_batch_id, il.transaction_id, il.notes,
+                   p.name AS product_name, p.sku_code
+            FROM inbound_lines il
+            JOIN products p ON p.id = il.product_id
+            WHERE il.inbound_id = :iid
+            ORDER BY il.id
         """), {"iid": inbound_id}).mappings().all()
     head_d = dict(head)
     head_d["lines"] = [dict(l) for l in lines]
@@ -3606,19 +3609,25 @@ def get_outbound_order(outbound_id: int, business_id: int,
         if not head:
             return None
         lines = conn.execute(text("""
-            SELECT id, product_id, requested_qty, picked_qty, unit_price,
-                   line_amount, tax_pct, discount_pct, avg_cogs, notes
-            FROM outbound_lines WHERE outbound_id = :oid
-            ORDER BY id
+            SELECT ol.id, ol.product_id, ol.requested_qty, ol.picked_qty, ol.unit_price,
+                   ol.line_amount, ol.tax_pct, ol.discount_pct, ol.avg_cogs, ol.notes,
+                   p.name AS product_name, p.sku_code
+            FROM outbound_lines ol
+            JOIN products p ON p.id = ol.product_id
+            WHERE ol.outbound_id = :oid
+            ORDER BY ol.id
         """), {"oid": outbound_id}).mappings().all()
         line_ids = [int(l["id"]) for l in lines]
         picks: list[dict] = []
         if line_ids:
             picks = [dict(r) for r in conn.execute(text("""
-                SELECT id, outbound_line_id, stock_batch_id, qty, unit_cost, transaction_id
-                FROM outbound_picks
-                WHERE outbound_line_id = ANY(:ids)
-                ORDER BY id
+                SELECT op.id, op.outbound_line_id, op.stock_batch_id, op.qty, op.unit_cost, op.transaction_id,
+                       il.batch_code
+                FROM outbound_picks op
+                JOIN stock_batches sb ON sb.id = op.stock_batch_id
+                LEFT JOIN inbound_lines il ON il.stock_batch_id = sb.id
+                WHERE op.outbound_line_id = ANY(:ids)
+                ORDER BY op.id
             """), {"ids": line_ids}).mappings().all()]
     head_d = dict(head)
     head_d["lines"] = [dict(l) for l in lines]
@@ -3640,7 +3649,8 @@ def _resolve_pick_plan(conn, *, product_id: int, business_id: int,
 
     rows = conn.execute(text(f"""
         SELECT sb.id, sb.remaining_qty, sb.expires_at,
-               COALESCE(il.unit_cost, 0) AS unit_cost
+               COALESCE(il.unit_cost, 0) AS unit_cost,
+               il.batch_code
         FROM stock_batches sb
         LEFT JOIN inbound_lines il ON il.stock_batch_id = sb.id
         WHERE sb.product_id = :pid
@@ -3665,6 +3675,7 @@ def _resolve_pick_plan(conn, *, product_id: int, business_id: int,
             "stock_batch_id": int(r["id"]),
             "qty": take,
             "unit_cost": float(r["unit_cost"]),
+            "batch_code": r.get("batch_code"),
         })
         remaining -= take
 
@@ -3712,6 +3723,8 @@ def preview_outbound_pick_plan(outbound_id: int, business_id: int,
             result_lines.append({
                 "outbound_line_id": int(ln["id"]),
                 "product_id": int(ln["product_id"]),
+                "product_name": ln.get("product_name"),
+                "sku_code": ln.get("sku_code"),
                 "requested_qty": int(ln["requested_qty"]),
                 "strategy": strategy,
                 "plan": plan,

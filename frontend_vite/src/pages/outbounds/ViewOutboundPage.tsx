@@ -18,6 +18,8 @@ import {
 interface Line {
   id: number;
   product_id: number;
+  product_name?: string;
+  sku_code?: string;
   requested_qty: number;
   picked_qty: number;
   unit_price: number;
@@ -29,6 +31,7 @@ interface Pick {
   id: number;
   outbound_line_id: number;
   stock_batch_id: number;
+  batch_code?: string;
   qty: number;
   unit_cost: number;
 }
@@ -50,9 +53,11 @@ interface Outbound {
 interface PlanLine {
   outbound_line_id: number;
   product_id: number;
+  product_name?: string;
+  sku_code?: string;
   requested_qty: number;
   strategy: string;
-  plan: { stock_batch_id: number; qty: number; unit_cost: number }[];
+  plan: { stock_batch_id: number; batch_code?: string; qty: number; unit_cost: number }[];
 }
 
 export default function ViewOutboundPage() {
@@ -169,7 +174,7 @@ export default function ViewOutboundPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Product #</TableHead>
+                <TableHead>Product</TableHead>
                 <TableHead>Requested</TableHead>
                 <TableHead>Picked</TableHead>
                 <TableHead>Unit price (₹)</TableHead>
@@ -180,7 +185,10 @@ export default function ViewOutboundPage() {
             <TableBody>
               {order.lines.map((l) => (
                 <TableRow key={l.id}>
-                  <TableCell className="font-mono text-xs">{l.product_id}</TableCell>
+                  <TableCell>
+                    {l.product_name}{" "}
+                    <span className="font-mono text-xs text-muted-foreground">({l.sku_code || l.product_id})</span>
+                  </TableCell>
                   <TableCell>{l.requested_qty}</TableCell>
                   <TableCell>{l.picked_qty}</TableCell>
                   <TableCell>{Number(l.unit_price).toFixed(2)}</TableCell>
@@ -204,12 +212,12 @@ export default function ViewOutboundPage() {
             {plan.map((pl) => (
               <div key={pl.outbound_line_id} className="border rounded p-3">
                 <div className="text-sm font-medium">
-                  Product #{pl.product_id} — request {pl.requested_qty}
+                  {pl.product_name} ({pl.sku_code || pl.product_id}) — request {pl.requested_qty}
                 </div>
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Stock batch</TableHead>
+                      <TableHead>Batch / Stock</TableHead>
                       <TableHead>Qty to pick</TableHead>
                       <TableHead>Unit cost (₹)</TableHead>
                     </TableRow>
@@ -218,7 +226,7 @@ export default function ViewOutboundPage() {
                     {pl.plan.map((p, i) => (
                       <TableRow key={i}>
                         <TableCell className="font-mono text-xs">
-                          #{p.stock_batch_id}
+                          {p.batch_code || `#${p.stock_batch_id}`}
                         </TableCell>
                         <TableCell>{p.qty}</TableCell>
                         <TableCell>{p.unit_cost.toFixed(2)}</TableCell>
@@ -242,7 +250,7 @@ export default function ViewOutboundPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Line</TableHead>
-                  <TableHead>Stock batch</TableHead>
+                  <TableHead>Batch / Stock</TableHead>
                   <TableHead>Qty</TableHead>
                   <TableHead>Unit cost (₹)</TableHead>
                 </TableRow>
@@ -254,7 +262,7 @@ export default function ViewOutboundPage() {
                       L{p.outbound_line_id}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      #{p.stock_batch_id}
+                      {p.batch_code || `#${p.stock_batch_id}`}
                     </TableCell>
                     <TableCell>{p.qty}</TableCell>
                     <TableCell>{Number(p.unit_cost).toFixed(2)}</TableCell>

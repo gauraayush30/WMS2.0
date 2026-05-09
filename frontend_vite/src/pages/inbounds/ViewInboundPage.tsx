@@ -18,6 +18,8 @@ import {
 interface InboundLine {
   id: number;
   product_id: number;
+  product_name?: string;
+  sku_code?: string;
   expected_qty: number;
   received_qty: number;
   unit_cost: number;
@@ -124,7 +126,7 @@ export default function ViewInboundPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Product #</TableHead>
+                <TableHead>Product</TableHead>
                 <TableHead>Expected</TableHead>
                 <TableHead>Received</TableHead>
                 <TableHead>Unit cost (₹)</TableHead>
@@ -136,7 +138,10 @@ export default function ViewInboundPage() {
             <TableBody>
               {order.lines.map((l) => (
                 <TableRow key={l.id}>
-                  <TableCell className="font-mono text-xs">{l.product_id}</TableCell>
+                  <TableCell>
+                    {l.product_name}{" "}
+                    <span className="font-mono text-xs text-muted-foreground">({l.sku_code || l.product_id})</span>
+                  </TableCell>
                   <TableCell>{l.expected_qty}</TableCell>
                   <TableCell>{l.received_qty}</TableCell>
                   <TableCell>{Number(l.unit_cost).toFixed(2)}</TableCell>
