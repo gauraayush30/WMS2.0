@@ -911,7 +911,7 @@ def create_inventory_transaction(
              transaction_at, reference_no, reason)
         VALUES
             (:product_id, :biz, :user_id, :adjusted, :prev, :curr,
-             COALESCE(:tx_at::timestamptz, NOW()), :ref, :reason)
+             COALESCE(CAST(:tx_at AS timestamptz), NOW()), :ref, :reason)
         RETURNING id, product_id, business_id, created_by, stock_adjusted, previous_stock,
                   current_stock, transaction_at, reference_no, reason
     """)
@@ -947,10 +947,10 @@ def get_inventory_transactions(
         where_clauses.append("t.product_id = :pid")
         params["pid"] = product_id
     if start_date:
-        where_clauses.append("t.transaction_at >= :start::timestamptz")
+        where_clauses.append("t.transaction_at >= CAST(:start AS timestamptz)")
         params["start"] = start_date
     if end_date:
-        where_clauses.append("t.transaction_at <= (:end::date + INTERVAL '1 day')")
+        where_clauses.append("t.transaction_at <= (CAST(:end AS date) + INTERVAL '1 day')")
         params["end"] = end_date
 
     where_sql = " AND ".join(where_clauses)
@@ -1044,7 +1044,7 @@ def create_inventory_batch(
                 (business_id, created_by, reason, reference_no, notes, total_items, total_amount, transaction_at)
             VALUES
                 (:biz, :uid, :reason, :ref, :notes, :total_items, :total_amount,
-                 COALESCE(:tx_at::timestamptz, NOW()))
+                 COALESCE(CAST(:tx_at AS timestamptz), NOW()))
             RETURNING id, business_id, created_by, reason, reference_no, notes,
                       total_items, total_amount, transaction_at, created_at
         """)
@@ -1070,7 +1070,7 @@ def create_inventory_batch(
                      transaction_at, reference_no, reason, batch_id)
                 VALUES
                     (:pid, :biz, :uid, :adj, :prev, :curr,
-                     COALESCE(:tx_at::timestamptz, NOW()), :ref, :reason, :batch_id)
+                     COALESCE(CAST(:tx_at AS timestamptz), NOW()), :ref, :reason, :batch_id)
             """), {
                 "pid": ld["product_id"], "biz": business_id, "uid": created_by,
                 "adj": ld["stock_adjusted"], "prev": ld["previous_stock"], "curr": ld["current_stock"],
@@ -1098,10 +1098,10 @@ def get_inventory_batches(
     params: dict = {"biz": business_id, "limit": per_page, "offset": offset}
 
     if start_date:
-        where_clauses.append("b.transaction_at >= :start::timestamptz")
+        where_clauses.append("b.transaction_at >= CAST(:start AS timestamptz)")
         params["start"] = start_date
     if end_date:
-        where_clauses.append("b.transaction_at <= (:end::date + INTERVAL '1 day')")
+        where_clauses.append("b.transaction_at <= (CAST(:end AS date) + INTERVAL '1 day')")
         params["end"] = end_date
     if reason:
         where_clauses.append("b.reason = :reason")
@@ -1650,7 +1650,7 @@ def create_stock_batch(
         INSERT INTO stock_batches
             (product_id, business_id, quantity, remaining_qty, purchased_at, expires_at, transaction_id)
         VALUES
-            (:pid, :biz, :qty, :qty, COALESCE(:purchased_at::timestamptz, NOW()), :expires_at::date, :tx_id)
+            (:pid, :biz, :qty, :qty, COALESCE(CAST(:purchased_at AS timestamptz), NOW()), CAST(:expires_at AS date), :tx_id)
         RETURNING id, product_id, business_id, quantity, remaining_qty,
                   purchased_at, expires_at, is_expired, transaction_id, created_at
     """)
@@ -2551,8 +2551,12 @@ def get_aging_buckets(business_id: int, customer_id: int | None) -> list[dict]:
             COALESCE(SUM(remaining_qty * price), 0) AS value
         FROM aged
         GROUP BY 1
-        ORDER BY CASE bucket
-            WHEN '0-30' THEN 1 WHEN '31-60' THEN 2 WHEN '61-90' THEN 3 ELSE 4 END
+        ORDER BY CASE 
+            WHEN MIN(age_days) <= 30 THEN 1 
+            WHEN MIN(age_days) <= 60 THEN 2 
+            WHEN MIN(age_days) <= 90 THEN 3 
+            ELSE 4 
+        END
     """)
     with engine.connect() as conn:
         rows = conn.execute(query, params).mappings().all()
@@ -2564,7 +2568,7 @@ def get_expiry_risk(business_id: int, customer_id: int | None,
     """Batches expiring within `days_window` days, sorted by ₹ at risk."""
     where = ["sb.business_id = :biz", "sb.remaining_qty > 0",
              "sb.is_expired = FALSE", "sb.expires_at IS NOT NULL",
-             "sb.expires_at <= (CURRENT_DATE + (:dw || ' days')::interval)::date"]
+             "sb.expires_at <= CAST((CURRENT_DATE + CAST((:dw || ' days') AS interval)) AS date)"]
     params: dict = {"biz": business_id, "dw": str(int(days_window))}
     if customer_id is not None:
         where.append("sb.customer_id = :cust"); params["cust"] = customer_id
@@ -3424,7 +3428,7 @@ def receive_inbound_order(inbound_id: int, business_id: int,
                 VALUES
                     (:pid, :biz, :cust, :wh, :uid,
                      :adj, :prev, :curr,
-                     COALESCE(:tat::timestamptz, NOW()), :ref, 'stock_in')
+                     COALESCE(CAST(:tat AS timestamptz), NOW()), :ref, 'stock_in')
                 RETURNING id
             """), {
                 "pid": ln["product_id"], "biz": business_id,
@@ -3443,7 +3447,7 @@ def receive_inbound_order(inbound_id: int, business_id: int,
                      quantity, remaining_qty, purchased_at, expires_at, transaction_id)
                 VALUES
                     (:pid, :biz, :cust, :wh,
-                     :qty, :qty, COALESCE(:pat::timestamptz, NOW()), :exp::date, :tx)
+                     :qty, :qty, COALESCE(CAST(:pat AS timestamptz), NOW()), CAST(:exp AS date), :tx)
                 RETURNING id
             """), {
                 "pid": ln["product_id"], "biz": business_id,
@@ -3518,7 +3522,7 @@ def create_outbound_order(
                  pick_strategy, total_qty, total_amount, notes, created_by)
             VALUES
                 (:biz, :cust, :wh, :buyer, :dl,
-                 :sh, :so, :inv, :idate, COALESCE(:sat::timestamptz, NOW()),
+                 :sh, :so, :inv, :idate, COALESCE(CAST(:sat AS timestamptz), NOW()),
                  :strat, :tq, :ta, :n, :uid)
             RETURNING {OUTBOUND_ORDER_COLUMNS}
         """), {
@@ -3767,7 +3771,7 @@ def ship_outbound_order(outbound_id: int, business_id: int,
                 VALUES
                     (:pid, :biz, :cust, :wh, :uid,
                      :adj, :prev, :curr,
-                     COALESCE(:sat::timestamptz, NOW()), :ref, 'stock_out')
+                     COALESCE(CAST(:sat AS timestamptz), NOW()), :ref, 'stock_out')
                 RETURNING id
             """), {
                 "pid": ln["product_id"], "biz": business_id,

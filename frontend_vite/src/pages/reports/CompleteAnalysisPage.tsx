@@ -86,7 +86,7 @@ export default function CompleteAnalysisPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const params = new URLSearchParams({ per_page: "300" });
+    const params = new URLSearchParams({ per_page: "50" });
     if (effectiveCustomerId) params.set("customer_id", String(effectiveCustomerId));
     authFetch(`${API}/products?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : { products: [] }))
