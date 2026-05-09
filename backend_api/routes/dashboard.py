@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from auth import (
     UserContext,
-    get_current_user_id,
     get_user_context,
     require_warehouse,
 )
@@ -24,28 +23,27 @@ from db import (
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 
-def _get_user_business_id(user_id: int) -> int:
-    user = get_user_by_id(user_id)
-    if not user or not user.get("business_id"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You must belong to a business to access this resource",
-        )
-    return user["business_id"]
+# _get_user_business_id removed in favor of UserContext
 
 
 @router.get("/stats")
-def dashboard_stats(user_id: int = Depends(get_current_user_id)):
+def dashboard_stats(
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
+):
     """Legacy aggregate dashboard statistics (kept for backwards compat)."""
-    biz_id = _get_user_business_id(user_id)
-    return get_dashboard_stats(biz_id)
+    cust = ctx.resolve_customer_filter(customer_id)
+    return get_dashboard_stats(ctx.business_id, cust)
 
 
 @router.get("/products-without-location")
-def products_without_location(user_id: int = Depends(get_current_user_id)):
+def products_without_location(
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
+):
     """Return all products that have no warehouse location assigned."""
-    biz_id = _get_user_business_id(user_id)
-    products = get_products_without_location(biz_id)
+    cust = ctx.resolve_customer_filter(customer_id)
+    products = get_products_without_location(ctx.business_id, cust)
     return {"products": products, "count": len(products)}
 
 

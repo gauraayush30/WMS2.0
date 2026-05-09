@@ -28,14 +28,7 @@ router = APIRouter(prefix="/inventory", tags=["Inventory"])
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get_user_business_id(user_id: int) -> int:
-    user = get_user_by_id(user_id)
-    if not user or not user.get("business_id"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You must belong to a business to access this resource",
-        )
-    return user["business_id"]
+# _get_user_business_id is no longer needed here as we use UserContext
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -78,18 +71,25 @@ def inventory_overview(
 
 
 @router.get("/summary")
-def inventory_summary(user_id: int = Depends(get_current_user_id)):
+def inventory_summary(
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
+):
     """Dashboard summary: total products, total stock, out-of-stock count, low-stock count."""
-    biz_id = _get_user_business_id(user_id)
-    return get_inventory_summary(biz_id)
+    cust = ctx.resolve_customer_filter(customer_id)
+    return get_inventory_summary(ctx.business_id, cust)
 
 
 # ── Transactions ─────────────────────────────────────────────────────────────
 
 @router.post("/transactions", status_code=status.HTTP_201_CREATED)
-def create_transaction_endpoint(body: InventoryTransactionCreate, user_id: int = Depends(get_current_user_id)):
+def create_transaction_endpoint(
+    body: InventoryTransactionCreate,
+    ctx: UserContext = Depends(get_user_context),
+):
     """Record a new inventory transaction (stock in, stock out, etc.)."""
-    biz_id = _get_user_business_id(user_id)
+    biz_id = ctx.business_id
+    user_id = ctx.user_id
     try:
         result = create_inventory_transaction(
             product_id=body.product_id,
@@ -135,19 +135,24 @@ def list_transactions(
     per_page: int = Query(20, ge=1, le=100),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """List inventory transactions (paginated, filterable by product & date range)."""
-    biz_id = _get_user_business_id(user_id)
-    return get_inventory_transactions(biz_id, product_id, page, per_page, start_date, end_date)
+    cust = ctx.resolve_customer_filter(customer_id)
+    return get_inventory_transactions(ctx.business_id, product_id, page, per_page, start_date, end_date, cust)
 
 
 # ── Batches ──────────────────────────────────────────────────────────────────
 
 @router.post("/batches", status_code=status.HTTP_201_CREATED)
-def create_batch_endpoint(body: InventoryBatchCreate, user_id: int = Depends(get_current_user_id)):
+def create_batch_endpoint(
+    body: InventoryBatchCreate,
+    ctx: UserContext = Depends(get_user_context),
+):
     """Create a batch inventory transaction grouping multiple product adjustments."""
-    biz_id = _get_user_business_id(user_id)
+    biz_id = ctx.business_id
+    user_id = ctx.user_id
     try:
         result = create_inventory_batch(
             business_id=biz_id,
@@ -195,18 +200,23 @@ def list_batches(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     reason: Optional[str] = Query(None),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """List inventory batches (paginated, filterable)."""
-    biz_id = _get_user_business_id(user_id)
-    return get_inventory_batches(biz_id, page, per_page, start_date, end_date, reason)
+    cust = ctx.resolve_customer_filter(customer_id)
+    return get_inventory_batches(ctx.business_id, page, per_page, start_date, end_date, reason, cust)
 
 
 @router.get("/batches/{batch_id}")
-def get_batch_detail_endpoint(batch_id: int, user_id: int = Depends(get_current_user_id)):
+def get_batch_detail_endpoint(
+    batch_id: int,
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
+):
     """Get a single batch with its line items."""
-    biz_id = _get_user_business_id(user_id)
-    batch = get_inventory_batch_detail(batch_id, biz_id)
+    cust = ctx.resolve_customer_filter(customer_id)
+    batch = get_inventory_batch_detail(batch_id, ctx.business_id, cust)
     if not batch:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
     return batch

@@ -29,16 +29,20 @@ const fmtINR = (n: number) =>
   "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 
 export default function OutboundDetailsPage() {
-  const { authFetch } = useAuth();
+  const { authFetch, effectiveCustomerId } = useAuth();
   const [items, setItems] = useState<OutboundDetail[]>([]);
   const [buyerFilter, setBuyerFilter] = useState("");
   const [locationFilter, setLocationFilter] = useState("");
 
   useEffect(() => {
-    authFetch(`${API}/reports/outbound-details?days=30`)
+    let url = `${API}/reports/outbound-details?days=30`;
+    if (effectiveCustomerId) {
+      url += `&customer_id=${effectiveCustomerId}`;
+    }
+    authFetch(url)
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((data) => setItems(data.items || []));
-  }, [authFetch]);
+  }, [authFetch, effectiveCustomerId]);
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {

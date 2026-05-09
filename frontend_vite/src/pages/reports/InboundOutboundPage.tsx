@@ -99,7 +99,7 @@ const OUTBOUND_COLOR = "#ef4444";
 /* ─────────────────────────── Component ──────────────────────── */
 
 export default function InboundOutboundPage() {
-  const { authFetch } = useAuth();
+  const { authFetch, effectiveCustomerId } = useAuth();
   const [data, setData] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState("30");
@@ -131,13 +131,14 @@ export default function InboundOutboundPage() {
       setLoading(true);
       let url = `${API}/reports/inbound-outbound?days=${days}`;
       if (productId) url += `&product_id=${productId}`;
+      if (effectiveCustomerId) url += `&customer_id=${effectiveCustomerId}`;
       authFetch(url)
         .then((r) => r.json())
         .then((d) => setData(d))
         .catch(console.error)
         .finally(() => setLoading(false));
     },
-    [authFetch, days],
+    [authFetch, days, effectiveCustomerId],
   );
 
   useEffect(() => {

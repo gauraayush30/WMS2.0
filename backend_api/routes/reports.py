@@ -3,7 +3,7 @@ Reports routes – analytical reports for the authenticated user's business.
 """
 
 from fastapi import APIRouter, HTTPException, status, Depends, Query
-from auth import get_current_user_id
+from auth import get_user_context, UserContext
 from db import (
     get_user_by_id, 
     engine,
@@ -25,10 +25,10 @@ def _get_user_business_id(user_id: int) -> int:
     return user["business_id"]
 
 
-@router.get("/fast-slow-moving")
 def fast_slow_moving_report(
     days: int = Query(30, ge=7, le=365, description="Look-back period in days"),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None, description="Optional customer filter"),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """
     Classify every product as Fast / Medium / Slow / Non-Moving
@@ -38,9 +38,20 @@ def fast_slow_moving_report(
     movement distribution within the business (top 25% = fast, bottom
     25% = slow, zero movement = non-moving).
     """
-    biz_id = _get_user_business_id(user_id)
+    """
+    cust = ctx.resolve_customer_filter(customer_id)
+    where_t = ["t.business_id = :biz", "t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)"]
+    where_m = ["m.business_id = :biz", "m.date >= (CURRENT_DATE - MAKE_INTERVAL(days => :days))"]
+    where_p = ["p.business_id = :biz"]
+    params: dict = {"biz": ctx.business_id, "days": days}
+    
+    if cust is not None:
+        where_t.append("t.customer_id = :cust")
+        where_m.append("m.customer_id = :cust")
+        where_p.append("p.customer_id = :cust")
+        params["cust"] = cust
 
-    query = text("""
+    query = text(f"""
         WITH movement AS (
             -- Outbound from inventory_transactions
             SELECT
@@ -49,8 +60,7 @@ def fast_slow_moving_report(
                 SUM(CASE WHEN t.stock_adjusted > 0 THEN t.stock_adjusted ELSE 0 END)::int       AS total_inbound,
                 COUNT(*)::int                                                                     AS tx_count
             FROM inventory_transactions t
-            WHERE t.business_id = :biz
-              AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+            WHERE {' AND '.join(where_t)}
             GROUP BY t.product_id
         ),
         ml_movement AS (
@@ -61,8 +71,7 @@ def fast_slow_moving_report(
                 SUM(m.inbound_qty)::int  AS total_inbound,
                 COUNT(*)::int            AS tx_count
             FROM ml_uploaded_history m
-            WHERE m.business_id = :biz
-              AND m.date >= (CURRENT_DATE - MAKE_INTERVAL(days => :days))
+            WHERE {' AND '.join(where_m)}
             GROUP BY m.product_id
         ),
         combined AS (
@@ -78,7 +87,7 @@ def fast_slow_moving_report(
             FROM products p
             LEFT JOIN movement    mv ON mv.product_id = p.id
             LEFT JOIN ml_movement ml ON ml.product_id = p.id
-            WHERE p.business_id = :biz
+            WHERE {' AND '.join(where_p)}
         ),
         thresholds AS (
             SELECT
@@ -106,7 +115,7 @@ def fast_slow_moving_report(
     """)
 
     with engine.connect() as conn:
-        rows = conn.execute(query, {"biz": biz_id, "days": days}).mappings().all()
+        rows = conn.execute(query, params).mappings().all()
 
     items = [dict(r) for r in rows]
 
@@ -132,7 +141,8 @@ def fast_slow_moving_report(
 def inbound_outbound_report(
     days: int = Query(30, ge=7, le=365, description="Look-back period in days"),
     product_id: int | None = Query(None, description="Optional product ID to get daily time-series for"),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None, description="Optional customer filter"),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """
     Inbound vs Outbound report:
@@ -141,10 +151,19 @@ def inbound_outbound_report(
       - Product list (for search dropdown)
       - Daily inbound/outbound time-series (all products or a specific one)
     """
-    biz_id = _get_user_business_id(user_id)
+    """
+    cust = ctx.resolve_customer_filter(customer_id)
+    where_t = ["t.business_id = :biz", "t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)"]
+    where_p = ["p.business_id = :biz"]
+    params: dict = {"biz": ctx.business_id, "days": days}
+    
+    if cust is not None:
+        where_t.append("t.customer_id = :cust")
+        where_p.append("p.customer_id = :cust")
+        params["cust"] = cust
 
     # ── Top 5 rankings ──────────────────────────────────────────
-    ranking_query = text("""
+    ranking_query = text(f"""
         WITH movement AS (
             SELECT
                 t.product_id,
@@ -153,8 +172,7 @@ def inbound_outbound_report(
                 SUM(CASE WHEN t.stock_adjusted < 0
                          THEN ABS(t.stock_adjusted) ELSE 0 END)::int AS total_outbound
             FROM inventory_transactions t
-            WHERE t.business_id = :biz
-              AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+            WHERE {' AND '.join(where_t)}
             GROUP BY t.product_id
         )
         SELECT
@@ -166,12 +184,12 @@ def inbound_outbound_report(
             p.stock_at_warehouse AS current_stock
         FROM products p
         LEFT JOIN movement m ON m.product_id = p.id
-        WHERE p.business_id = :biz
+        WHERE {' AND '.join(where_p)}
         ORDER BY COALESCE(m.total_outbound, 0) + COALESCE(m.total_inbound, 0) DESC
     """)
 
     with engine.connect() as conn:
-        rows = conn.execute(ranking_query, {"biz": biz_id, "days": days}).mappings().all()
+        rows = conn.execute(ranking_query, params).mappings().all()
 
     all_products = [dict(r) for r in rows]
 
@@ -188,7 +206,9 @@ def inbound_outbound_report(
 
     # ── Daily time-series ────────────────────────────────────────
     if product_id:
-        timeline_query = text("""
+        tl_where = where_t + ["t.product_id = :pid"]
+        tl_params = {**params, "pid": product_id}
+        timeline_query = text(f"""
             SELECT
                 DATE(t.transaction_at) AS date,
                 SUM(CASE WHEN t.stock_adjusted > 0
@@ -196,18 +216,14 @@ def inbound_outbound_report(
                 SUM(CASE WHEN t.stock_adjusted < 0
                          THEN ABS(t.stock_adjusted) ELSE 0 END)::int AS outbound
             FROM inventory_transactions t
-            WHERE t.business_id = :biz
-              AND t.product_id = :pid
-              AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+            WHERE {' AND '.join(tl_where)}
             GROUP BY DATE(t.transaction_at)
             ORDER BY date
         """)
         with engine.connect() as conn:
-            tl_rows = conn.execute(
-                timeline_query, {"biz": biz_id, "pid": product_id, "days": days}
-            ).mappings().all()
+            tl_rows = conn.execute(timeline_query, tl_params).mappings().all()
     else:
-        timeline_query = text("""
+        timeline_query = text(f"""
             SELECT
                 DATE(t.transaction_at) AS date,
                 SUM(CASE WHEN t.stock_adjusted > 0
@@ -215,15 +231,12 @@ def inbound_outbound_report(
                 SUM(CASE WHEN t.stock_adjusted < 0
                          THEN ABS(t.stock_adjusted) ELSE 0 END)::int AS outbound
             FROM inventory_transactions t
-            WHERE t.business_id = :biz
-              AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
+            WHERE {' AND '.join(where_t)}
             GROUP BY DATE(t.transaction_at)
             ORDER BY date
         """)
         with engine.connect() as conn:
-            tl_rows = conn.execute(
-                timeline_query, {"biz": biz_id, "days": days}
-            ).mappings().all()
+            tl_rows = conn.execute(timeline_query, params).mappings().all()
 
     timeline = [dict(r) for r in tl_rows]
     # Convert date objects to strings for JSON serialization
@@ -253,22 +266,26 @@ def inbound_outbound_report(
 @router.get("/inbound-details")
 def inbound_details_report(
     days: int = Query(30, ge=1, le=365, description="Look-back period in days"),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None, description="Optional customer filter"),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """
     Shows stock in / inbound details: seller, location, product, qty, price, batchno.
     """
-    biz_id = _get_user_business_id(user_id)
-    return {"days": days, "items": get_inbound_report_details(biz_id, days)}
+    """
+    cust = ctx.resolve_customer_filter(customer_id)
+    return {"days": days, "items": get_inbound_report_details(ctx.business_id, days, cust)}
 
 
 @router.get("/outbound-details")
 def outbound_details_report(
     days: int = Query(30, ge=1, le=365, description="Look-back period in days"),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None, description="Optional customer filter"),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """
     Shows stock out / outbound details: buyer, location, product, qty, price, batchno.
     """
-    biz_id = _get_user_business_id(user_id)
-    return {"days": days, "items": get_outbound_report_details(biz_id, days)}
+    """
+    cust = ctx.resolve_customer_filter(customer_id)
+    return {"days": days, "items": get_outbound_report_details(ctx.business_id, days, cust)}

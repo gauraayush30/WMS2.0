@@ -859,19 +859,25 @@ def get_inventory_overview(
     }
 
 
-def get_inventory_summary(business_id: int) -> dict:
+def get_inventory_summary(business_id: int, customer_id: int | None = None) -> dict:
     """High-level inventory stats for dashboard."""
-    query = text("""
+    where = ["business_id = :biz"]
+    params: dict = {"biz": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :cust")
+        params["cust"] = customer_id
+        
+    query = text(f"""
         SELECT
             COUNT(*)::int                           AS total_products,
             COALESCE(SUM(stock_at_warehouse), 0)::int AS total_stock,
             COUNT(*) FILTER (WHERE stock_at_warehouse = 0)::int AS out_of_stock,
             COUNT(*) FILTER (WHERE stock_at_warehouse > 0 AND stock_at_warehouse <= 10)::int AS low_stock
         FROM products
-        WHERE business_id = :biz
+        WHERE {' AND '.join(where)}
     """)
     with engine.connect() as conn:
-        row = conn.execute(query, {"biz": business_id}).mappings().fetchone()
+        row = conn.execute(query, params).mappings().fetchone()
     return dict(row) if row else {"total_products": 0, "total_stock": 0, "out_of_stock": 0, "low_stock": 0}
 
 
@@ -936,6 +942,7 @@ def get_inventory_transactions(
     per_page: int = 20,
     start_date: str | None = None,
     end_date: str | None = None,
+    customer_id: int | None = None,
 ) -> dict:
     """Return paginated inventory transactions for a business, optionally filtered by product and date range."""
     offset = (page - 1) * per_page
@@ -952,10 +959,13 @@ def get_inventory_transactions(
     if end_date:
         where_clauses.append("t.transaction_at <= (CAST(:end AS date) + INTERVAL '1 day')")
         params["end"] = end_date
+    if customer_id is not None:
+        where_clauses.append("p.customer_id = :cust")
+        params["cust"] = customer_id
 
     where_sql = " AND ".join(where_clauses)
 
-    count_query = text(f"SELECT COUNT(*)::int AS total FROM inventory_transactions t WHERE {where_sql}")
+    count_query = text(f"SELECT COUNT(*)::int AS total FROM inventory_transactions t JOIN products p ON p.id = t.product_id WHERE {where_sql}")
     data_query = text(f"""
         SELECT t.id, t.product_id, p.name AS product_name, p.sku_code,
                t.stock_adjusted, t.previous_stock, t.current_stock,
@@ -1090,6 +1100,7 @@ def get_inventory_batches(
     start_date: str | None = None,
     end_date: str | None = None,
     reason: str | None = None,
+    customer_id: int | None = None,
 ) -> dict:
     """Return paginated inventory batches for the business."""
     offset = (page - 1) * per_page
@@ -1106,6 +1117,9 @@ def get_inventory_batches(
     if reason:
         where_clauses.append("b.reason = :reason")
         params["reason"] = reason
+    if customer_id is not None:
+        where_clauses.append("EXISTS (SELECT 1 FROM inventory_transactions it JOIN products p ON p.id = it.product_id WHERE it.batch_id = b.id AND p.customer_id = :cust)")
+        params["cust"] = customer_id
 
     where_sql = " AND ".join(where_clauses)
 
@@ -1141,7 +1155,7 @@ def get_inventory_batches(
     }
 
 
-def get_inventory_batch_detail(batch_id: int, business_id: int) -> dict | None:
+def get_inventory_batch_detail(batch_id: int, business_id: int, customer_id: int | None = None) -> dict | None:
     """Return a single batch with its line items."""
     batch_q = text("""
         SELECT b.id, b.reason, b.reference_no, b.notes, b.total_items,
@@ -1151,20 +1165,29 @@ def get_inventory_batch_detail(batch_id: int, business_id: int) -> dict | None:
         JOIN users u ON u.id = b.created_by
         WHERE b.id = :id AND b.business_id = :biz
     """)
-    items_q = text("""
+    items_q_str = """
         SELECT t.id, t.product_id, p.name AS product_name, p.sku_code, p.price,
                t.stock_adjusted, t.previous_stock, t.current_stock
         FROM inventory_transactions t
         JOIN products p ON p.id = t.product_id
         WHERE t.batch_id = :batch_id AND t.business_id = :biz
-        ORDER BY p.name
-    """)
+    """
+    params = {"batch_id": batch_id, "biz": business_id}
+    if customer_id is not None:
+        items_q_str += " AND p.customer_id = :cust"
+        params["cust"] = customer_id
+    items_q_str += " ORDER BY p.name"
+    
+    items_q = text(items_q_str)
 
     with engine.connect() as conn:
         batch_row = conn.execute(batch_q, {"id": batch_id, "biz": business_id}).mappings().fetchone()
         if not batch_row:
             return None
-        items_rows = conn.execute(items_q, {"batch_id": batch_id, "biz": business_id}).mappings().all()
+        items_rows = conn.execute(items_q, params).mappings().all()
+
+    if customer_id is not None and not items_rows:
+        return None
 
     batch = dict(batch_row)
     batch["transaction_at"] = str(batch["transaction_at"])
@@ -1431,34 +1454,48 @@ def delete_delivery_location(location_id: int, business_id: int) -> bool:
 
 # ── Dashboard helpers ────────────────────────────────────────────────────────
 
-def get_products_without_location(business_id: int) -> list[dict]:
+def get_products_without_location(business_id: int, customer_id: int | None = None) -> list[dict]:
     """Return products that have no warehouse location set (all location fields empty)."""
+    where = [
+        "business_id = :biz",
+        "location_zone  = ''",
+        "location_aisle = ''",
+        "location_rack  = ''",
+        "location_shelf = ''",
+        "location_level = ''",
+        "location_bin   = ''"
+    ]
+    params = {"biz": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :cust")
+        params["cust"] = customer_id
+        
     query = text(f"""
         SELECT {PRODUCT_COLUMNS}
         FROM products
-        WHERE business_id = :biz
-          AND location_zone  = ''
-          AND location_aisle = ''
-          AND location_rack  = ''
-          AND location_shelf = ''
-          AND location_level = ''
-          AND location_bin   = ''
+        WHERE {' AND '.join(where)}
         ORDER BY name
     """)
     with engine.connect() as conn:
-        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+        rows = conn.execute(query, params).mappings().all()
     return [dict(r) for r in rows]
 
 
-def get_dashboard_stats(business_id: int) -> dict:
+def get_dashboard_stats(business_id: int, customer_id: int | None = None) -> dict:
     """Aggregate stats for the dashboard."""
+    where_base = "business_id = :biz"
+    params = {"biz": business_id}
+    if customer_id is not None:
+        where_base += " AND customer_id = :cust"
+        params["cust"] = customer_id
+
     queries = {
-        "total_products": text("""
-            SELECT COUNT(*)::int FROM products WHERE business_id = :biz
+        "total_products": text(f"""
+            SELECT COUNT(*)::int FROM products WHERE {where_base}
         """),
-        "products_without_location": text("""
+        "products_without_location": text(f"""
             SELECT COUNT(*)::int FROM products
-            WHERE business_id = :biz
+            WHERE {where_base}
               AND location_zone  = ''
               AND location_aisle = ''
               AND location_rack  = ''
@@ -1466,21 +1503,21 @@ def get_dashboard_stats(business_id: int) -> dict:
               AND location_level = ''
               AND location_bin   = ''
         """),
-        "low_stock_products": text("""
+        "low_stock_products": text(f"""
             SELECT COUNT(*)::int FROM products
-            WHERE business_id = :biz
+            WHERE {where_base}
               AND reorder_point > 0
               AND stock_at_warehouse <= reorder_point
         """),
-        "out_of_stock_products": text("""
+        "out_of_stock_products": text(f"""
             SELECT COUNT(*)::int FROM products
-            WHERE business_id = :biz AND stock_at_warehouse = 0
+            WHERE {where_base} AND stock_at_warehouse = 0
         """),
     }
     stats = {}
     with engine.connect() as conn:
         for key, q in queries.items():
-            stats[key] = conn.execute(q, {"biz": business_id}).scalar() or 0
+            stats[key] = conn.execute(q, params).scalar() or 0
     return stats
 
 
@@ -1787,14 +1824,20 @@ def get_all_business_ids() -> list[int]:
 
 # ── Location Utilization ─────────────────────────────────────────────────────
 
-def get_product_velocity_classification(business_id: int, days: int = 90) -> list[dict]:
+def get_product_velocity_classification(business_id: int, days: int = 90, customer_id: int | None = None) -> list[dict]:
     """Classify products as A/B/C based on outbound volume over last N days.
 
     A = top 20% by outbound volume (fast movers)
     B = next 30% (medium movers)
     C = bottom 50% (slow movers)
     """
-    query = text("""
+    where_p = ["p.business_id = :biz"]
+    params = {"biz": business_id, "days": days}
+    if customer_id is not None:
+        where_p.append("p.customer_id = :cust")
+        params["cust"] = customer_id
+
+    query = text(f"""
         SELECT
             p.id, p.name, p.sku_code, p.stock_at_warehouse,
             p.location_zone, p.location_aisle, p.location_rack,
@@ -1807,12 +1850,12 @@ def get_product_velocity_classification(business_id: int, days: int = 90) -> lis
             ON t.product_id = p.id
            AND t.business_id = p.business_id
            AND t.transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
-        WHERE p.business_id = :biz
+        WHERE {' AND '.join(where_p)}
         GROUP BY p.id
         ORDER BY outbound_volume DESC
     """)
     with engine.connect() as conn:
-        rows = conn.execute(query, {"biz": business_id, "days": days}).mappings().all()
+        rows = conn.execute(query, params).mappings().all()
 
     products = [dict(r) for r in rows]
     total = len(products)
@@ -1837,9 +1880,18 @@ def get_product_velocity_classification(business_id: int, days: int = 90) -> lis
     return products
 
 
-def get_location_utilization(business_id: int, days: int = 90) -> list[dict]:
+def get_location_utilization(business_id: int, days: int = 90, customer_id: int | None = None) -> list[dict]:
     """Aggregate utilization metrics per zone/aisle."""
-    query = text("""
+    where_p = [
+        "p.business_id = :biz",
+        "(p.location_zone IS NOT NULL AND p.location_zone != '')"
+    ]
+    params = {"biz": business_id, "days": days}
+    if customer_id is not None:
+        where_p.append("p.customer_id = :cust")
+        params["cust"] = customer_id
+
+    query = text(f"""
         SELECT
             p.location_zone   AS zone,
             p.location_aisle  AS aisle,
@@ -1858,13 +1910,12 @@ def get_location_utilization(business_id: int, days: int = 90) -> list[dict]:
               AND transaction_at >= NOW() - MAKE_INTERVAL(days => :days)
             GROUP BY product_id
         ) out_data ON out_data.product_id = p.id
-        WHERE p.business_id = :biz
-          AND (p.location_zone IS NOT NULL AND p.location_zone != '')
+        WHERE {' AND '.join(where_p)}
         GROUP BY p.location_zone, p.location_aisle
         ORDER BY total_outbound DESC
     """)
     with engine.connect() as conn:
-        rows = conn.execute(query, {"biz": business_id, "days": days}).mappings().all()
+        rows = conn.execute(query, params).mappings().all()
 
     results = []
     for r in rows:
@@ -1874,14 +1925,14 @@ def get_location_utilization(business_id: int, days: int = 90) -> list[dict]:
     return results
 
 
-def generate_placement_suggestions(business_id: int, days: int = 90) -> list[dict]:
+def generate_placement_suggestions(business_id: int, days: int = 90, customer_id: int | None = None) -> list[dict]:
     """Generate smart placement suggestions by cross-referencing product velocity with location priority.
 
     Returns a list of suggestion dicts with type, priority, product info,
     current location, suggested location, and description.
     """
     # 1. Get product velocity classification
-    products = get_product_velocity_classification(business_id, days)
+    products = get_product_velocity_classification(business_id, days, customer_id)
     if not products:
         return []
 
@@ -2122,17 +2173,25 @@ def delete_warehouse_location_config(config_id: int, business_id: int) -> bool:
     return result.rowcount > 0
 
 
-def get_distinct_zones(business_id: int) -> list[dict]:
+def get_distinct_zones(business_id: int, customer_id: int | None = None) -> list[dict]:
     """Return distinct zone/aisle combos from products for auto-suggesting config."""
-    query = text("""
+    where = [
+        "business_id = :biz",
+        "location_zone IS NOT NULL AND location_zone != ''"
+    ]
+    params = {"biz": business_id}
+    if customer_id is not None:
+        where.append("customer_id = :cust")
+        params["cust"] = customer_id
+        
+    query = text(f"""
         SELECT DISTINCT location_zone AS zone, location_aisle AS aisle
         FROM products
-        WHERE business_id = :biz
-          AND location_zone IS NOT NULL AND location_zone != ''
+        WHERE {' AND '.join(where)}
         ORDER BY location_zone, location_aisle
     """)
     with engine.connect() as conn:
-        rows = conn.execute(query, {"biz": business_id}).mappings().all()
+        rows = conn.execute(query, params).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -3832,8 +3891,18 @@ def ship_outbound_order(outbound_id: int, business_id: int,
 
 # ── Reports ─────────────────────────────────────────────────────────────
 
-def get_inbound_report_details(business_id: int, days: int) -> list[dict]:
-    query = text("""
+def get_inbound_report_details(business_id: int, days: int, customer_id: int | None = None) -> list[dict]:
+    where = [
+        "io.business_id = :biz",
+        "io.status = 'received'",
+        "io.received_at >= NOW() - MAKE_INTERVAL(days => :days)"
+    ]
+    params: dict = {"biz": business_id, "days": days}
+    if customer_id is not None:
+        where.append("io.customer_id = :cust")
+        params["cust"] = customer_id
+
+    query = text(f"""
         SELECT 
             io.grn_number,
             DATE(io.received_at) AS date,
@@ -3853,17 +3922,25 @@ def get_inbound_report_details(business_id: int, days: int) -> list[dict]:
         JOIN inbound_lines il ON il.inbound_id = io.id
         JOIN products p ON p.id = il.product_id
         LEFT JOIN suppliers s ON s.id = io.supplier_id
-        WHERE io.business_id = :biz
-          AND io.status = 'received'
-          AND io.received_at >= NOW() - MAKE_INTERVAL(days => :days)
+        WHERE {' AND '.join(where)}
         ORDER BY io.received_at DESC
     """)
     with engine.connect() as conn:
-        rows = conn.execute(query, {"biz": business_id, "days": days}).mappings().all()
+        rows = conn.execute(query, params).mappings().all()
     return [{"date": str(r["date"]), **{k:v for k,v in r.items() if k != "date"}} for r in rows]
 
-def get_outbound_report_details(business_id: int, days: int) -> list[dict]:
-    query = text("""
+def get_outbound_report_details(business_id: int, days: int, customer_id: int | None = None) -> list[dict]:
+    where = [
+        "oo.business_id = :biz",
+        "oo.status = 'shipped'",
+        "oo.shipped_at >= NOW() - MAKE_INTERVAL(days => :days)"
+    ]
+    params: dict = {"biz": business_id, "days": days}
+    if customer_id is not None:
+        where.append("oo.customer_id = :cust")
+        params["cust"] = customer_id
+
+    query = text(f"""
         SELECT 
             oo.shipment_number,
             DATE(oo.shipped_at) AS date,
@@ -3882,11 +3959,9 @@ def get_outbound_report_details(business_id: int, days: int) -> list[dict]:
         LEFT JOIN inbound_lines il ON il.stock_batch_id = sb.id
         LEFT JOIN buyers b ON b.id = oo.buyer_id
         LEFT JOIN buyer_locations bl ON bl.id = oo.delivery_location_id
-        WHERE oo.business_id = :biz
-          AND oo.status = 'shipped'
-          AND oo.shipped_at >= NOW() - MAKE_INTERVAL(days => :days)
+        WHERE {' AND '.join(where)}
         ORDER BY oo.shipped_at DESC
     """)
     with engine.connect() as conn:
-        rows = conn.execute(query, {"biz": business_id, "days": days}).mappings().all()
+        rows = conn.execute(query, params).mappings().all()
     return [{"date": str(r["date"]), **{k:v for k,v in r.items() if k != "date"}} for r in rows]

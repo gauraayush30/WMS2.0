@@ -5,7 +5,7 @@ Location Utilization routes – heatmap, velocity classification, smart placemen
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from pydantic import BaseModel, Field
 
-from auth import get_current_user_id
+from auth import get_user_context, UserContext
 from db import (
     get_user_by_id,
     get_product_velocity_classification,
@@ -20,16 +20,7 @@ from db import (
 router = APIRouter(prefix="/location-utilization", tags=["Location Utilization"])
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-def _get_user_business_id(user_id: int) -> int:
-    user = get_user_by_id(user_id)
-    if not user or not user.get("business_id"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You must belong to a business to access this resource",
-        )
-    return user["business_id"]
+# _get_user_business_id removed in favor of UserContext
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -46,12 +37,13 @@ class LocationConfigCreate(BaseModel):
 @router.get("/overview")
 def location_overview(
     days: int = Query(90, ge=7, le=365),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """Location heatmap data + summary stats."""
-    biz_id = _get_user_business_id(user_id)
-    utilization = get_location_utilization(biz_id, days)
-    configs = get_warehouse_location_configs(biz_id)
+    cust = ctx.resolve_customer_filter(customer_id)
+    utilization = get_location_utilization(ctx.business_id, days, cust)
+    configs = get_warehouse_location_configs(ctx.business_id)
 
     # Build priority lookup for enrichment
     priority_map = {}
@@ -93,11 +85,12 @@ def location_overview(
 @router.get("/velocity")
 def product_velocity(
     days: int = Query(90, ge=7, le=365),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """Product ABC velocity classification list."""
-    biz_id = _get_user_business_id(user_id)
-    products = get_product_velocity_classification(biz_id, days)
+    cust = ctx.resolve_customer_filter(customer_id)
+    products = get_product_velocity_classification(ctx.business_id, days, cust)
     counts = {"A": 0, "B": 0, "C": 0}
     for p in products:
         counts[p["velocity_class"]] = counts.get(p["velocity_class"], 0) + 1
@@ -112,11 +105,12 @@ def product_velocity(
 @router.get("/suggestions")
 def placement_suggestions(
     days: int = Query(90, ge=7, le=365),
-    user_id: int = Depends(get_current_user_id),
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """Smart placement suggestions."""
-    biz_id = _get_user_business_id(user_id)
-    suggestions = generate_placement_suggestions(biz_id, days)
+    cust = ctx.resolve_customer_filter(customer_id)
+    suggestions = generate_placement_suggestions(ctx.business_id, days, cust)
     counts = {"high": 0, "medium": 0, "low": 0}
     for s in suggestions:
         counts[s["priority"]] = counts.get(s["priority"], 0) + 1
@@ -128,21 +122,24 @@ def placement_suggestions(
 
 
 @router.get("/config")
-def get_config(user_id: int = Depends(get_current_user_id)):
+def get_config(
+    customer_id: int | None = Query(None),
+    ctx: UserContext = Depends(get_user_context),
+):
     """Get all location priority configs + auto-detected zones."""
-    biz_id = _get_user_business_id(user_id)
-    configs = get_warehouse_location_configs(biz_id)
-    zones = get_distinct_zones(biz_id)
+    cust = ctx.resolve_customer_filter(customer_id)
+    configs = get_warehouse_location_configs(ctx.business_id)
+    zones = get_distinct_zones(ctx.business_id, cust)
     return {"configs": configs, "detected_zones": zones}
 
 
 @router.post("/config", status_code=status.HTTP_201_CREATED)
 def create_or_update_config(
     body: LocationConfigCreate,
-    user_id: int = Depends(get_current_user_id),
+    ctx: UserContext = Depends(get_user_context),
 ):
     """Create or update a location priority config entry."""
-    biz_id = _get_user_business_id(user_id)
+    biz_id = ctx.business_id
     result = upsert_warehouse_location_config(
         biz_id, body.zone, body.aisle, body.priority, body.label,
     )
@@ -150,9 +147,12 @@ def create_or_update_config(
 
 
 @router.delete("/config/{config_id}")
-def delete_config(config_id: int, user_id: int = Depends(get_current_user_id)):
+def delete_config(
+    config_id: int,
+    ctx: UserContext = Depends(get_user_context),
+):
     """Delete a location config entry."""
-    biz_id = _get_user_business_id(user_id)
+    biz_id = ctx.business_id
     deleted = delete_warehouse_location_config(config_id, biz_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config not found")
