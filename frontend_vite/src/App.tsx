@@ -32,6 +32,8 @@ import InboundOutboundPage from "./pages/reports/InboundOutboundPage";
 import FifoFefoPage from "./pages/reports/FifoFefoPage";
 import CompleteAnalysisPage from "./pages/reports/CompleteAnalysisPage";
 import BehaviorAnalysisPage from "./pages/reports/BehaviorAnalysisPage";
+import InboundDetailsPage from "./pages/reports/InboundDetailsPage";
+import OutboundDetailsPage from "./pages/reports/OutboundDetailsPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -132,6 +134,14 @@ function AppInner() {
           <Route
             path="/reports/behavior"
             element={<BehaviorAnalysisPage />}
+          />
+          <Route
+            path="/reports/inbound-details"
+            element={<InboundDetailsPage />}
+          />
+          <Route
+            path="/reports/outbound-details"
+            element={<OutboundDetailsPage />}
           />
         </Route>
       </Routes>

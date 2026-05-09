@@ -4,7 +4,12 @@ Reports routes – analytical reports for the authenticated user's business.
 
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from auth import get_current_user_id
-from db import get_user_by_id, engine
+from db import (
+    get_user_by_id, 
+    engine,
+    get_inbound_report_details,
+    get_outbound_report_details
+)
 from sqlalchemy import text
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -243,3 +248,27 @@ def inbound_outbound_report(
         "timeline": timeline,
         "selected_product_id": product_id,
     }
+
+
+@router.get("/inbound-details")
+def inbound_details_report(
+    days: int = Query(30, ge=1, le=365, description="Look-back period in days"),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    Shows stock in / inbound details: seller, location, product, qty, price, batchno.
+    """
+    biz_id = _get_user_business_id(user_id)
+    return {"days": days, "items": get_inbound_report_details(biz_id, days)}
+
+
+@router.get("/outbound-details")
+def outbound_details_report(
+    days: int = Query(30, ge=1, le=365, description="Look-back period in days"),
+    user_id: int = Depends(get_current_user_id),
+):
+    """
+    Shows stock out / outbound details: buyer, location, product, qty, price, batchno.
+    """
+    biz_id = _get_user_business_id(user_id)
+    return {"days": days, "items": get_outbound_report_details(biz_id, days)}

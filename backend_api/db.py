@@ -3815,3 +3815,65 @@ def ship_outbound_order(outbound_id: int, business_id: int,
         """), {"id": outbound_id})
 
     return get_outbound_order(outbound_id, business_id, customer_id) or {}
+
+
+# ── Reports ─────────────────────────────────────────────────────────────
+
+def get_inbound_report_details(business_id: int, days: int) -> list[dict]:
+    query = text("""
+        SELECT 
+            io.grn_number,
+            DATE(io.received_at) AS date,
+            s.name AS seller_name,
+            COALESCE(
+                (SELECT STRING_AGG(name || ' (' || city || ')', ', ') 
+                 FROM seller_locations 
+                 WHERE supplier_id = s.id AND is_active = TRUE), 
+                s.address
+            ) AS location,
+            p.name AS product_name,
+            p.sku_code,
+            il.expected_qty AS quantity,
+            il.unit_cost AS price,
+            il.batch_code
+        FROM inbound_orders io
+        JOIN inbound_lines il ON il.inbound_id = io.id
+        JOIN products p ON p.id = il.product_id
+        LEFT JOIN suppliers s ON s.id = io.supplier_id
+        WHERE io.business_id = :biz
+          AND io.status = 'received'
+          AND io.received_at >= NOW() - MAKE_INTERVAL(days => :days)
+        ORDER BY io.received_at DESC
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id, "days": days}).mappings().all()
+    return [{"date": str(r["date"]), **{k:v for k,v in r.items() if k != "date"}} for r in rows]
+
+def get_outbound_report_details(business_id: int, days: int) -> list[dict]:
+    query = text("""
+        SELECT 
+            oo.shipment_number,
+            DATE(oo.shipped_at) AS date,
+            b.name AS buyer_name,
+            COALESCE(bl.name || ' (' || bl.city || ')', bl.address, '') AS location,
+            p.name AS product_name,
+            p.sku_code,
+            op.qty AS quantity,
+            op.unit_cost AS price,
+            il.batch_code
+        FROM outbound_orders oo
+        JOIN outbound_lines ol ON ol.outbound_id = oo.id
+        JOIN products p ON p.id = ol.product_id
+        JOIN outbound_picks op ON op.outbound_line_id = ol.id
+        JOIN stock_batches sb ON sb.id = op.stock_batch_id
+        LEFT JOIN inbound_lines il ON il.stock_batch_id = sb.id
+        LEFT JOIN buyers b ON b.id = oo.buyer_id
+        LEFT JOIN buyer_locations bl ON bl.id = oo.delivery_location_id
+        WHERE oo.business_id = :biz
+          AND oo.status = 'shipped'
+          AND oo.shipped_at >= NOW() - MAKE_INTERVAL(days => :days)
+        ORDER BY oo.shipped_at DESC
+    """)
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"biz": business_id, "days": days}).mappings().all()
+    return [{"date": str(r["date"]), **{k:v for k,v in r.items() if k != "date"}} for r in rows]

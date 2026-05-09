@@ -5,6 +5,8 @@ import {
   Recycle,
   LayoutGrid,
   Activity,
+  Download,
+  Upload,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { motion } from "framer-motion";
@@ -49,6 +51,22 @@ const reports = [
     description:
       "ABC × XYZ matrix and lifecycle classification across all SKUs.",
     color: "bg-rose-50 text-rose-600",
+  },
+  {
+    to: "/reports/inbound-details",
+    icon: Download,
+    label: "Inbound Details",
+    description:
+      "Detailed view of stock-in records, including seller location, pricing, and batch details.",
+    color: "bg-teal-50 text-teal-600",
+  },
+  {
+    to: "/reports/outbound-details",
+    icon: Upload,
+    label: "Outbound Details",
+    description:
+      "Detailed view of stock-out records, including buyer location, pricing, and batch details.",
+    color: "bg-orange-50 text-orange-600",
   },
 ];
 
