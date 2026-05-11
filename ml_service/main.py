@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routes import router
+from portfolio_routes import router as portfolio_router
 
 app = FastAPI(
     title="WMS ML Service",
@@ -25,6 +26,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(portfolio_router)
 
 
 @app.get("/health")

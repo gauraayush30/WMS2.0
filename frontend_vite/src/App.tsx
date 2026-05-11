@@ -27,6 +27,7 @@ import BuyersPage from "./pages/buyers/BuyersPage";
 import SellersPage from "./pages/sellers/SellersPage";
 import UsersPage from "./pages/UsersPage";
 import ReportsPage from "./pages/ReportsPage";
+import ForecastPortfolioPage from "./pages/ForecastPortfolioPage";
 import FastSlowMovingPage from "./pages/reports/FastSlowMovingPage";
 import InboundOutboundPage from "./pages/reports/InboundOutboundPage";
 import FifoFefoPage from "./pages/reports/FifoFefoPage";
@@ -117,6 +118,7 @@ function AppInner() {
               </WarehouseAdminOnly>
             }
           />
+          <Route path="/forecast/portfolio" element={<ForecastPortfolioPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route
             path="/reports/fast-slow-moving"

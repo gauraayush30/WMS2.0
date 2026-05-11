@@ -21,16 +21,22 @@ export default function WarehouseSwitcher() {
       .then((r) => (r.ok ? r.json() : { warehouses: [] }))
       .then((data) => {
         if (!mounted) return;
-        setWarehouses(data.warehouses || []);
+        const list: Warehouse[] = data.warehouses || [];
+        setWarehouses(list);
+        // Auto-select the first warehouse so pages that require a
+        // warehouse_id (e.g. /forecast/portfolio) work without the user
+        // having to pick one.
+        if (selectedWarehouseId === null && list.length > 0) {
+          setSelectedWarehouseId(list[0].id);
+        }
       })
       .finally(() => mounted && setLoading(false));
     return () => {
       mounted = false;
     };
-  }, [authFetch]);
+  }, [authFetch, selectedWarehouseId, setSelectedWarehouseId]);
 
-  // If only one warehouse exists, hide the switcher (no choice to make).
-  if (!loading && warehouses.length <= 1) return null;
+  if (loading && warehouses.length === 0) return null;
 
   return (
     <div className="flex items-center gap-2 text-sm">
@@ -50,6 +56,9 @@ export default function WarehouseSwitcher() {
             {w.name} {w.code ? `(${w.code})` : ""}
           </option>
         ))}
+        {!loading && warehouses.length === 0 && (
+          <option disabled>No warehouses yet</option>
+        )}
       </select>
     </div>
   );

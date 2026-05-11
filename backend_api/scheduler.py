@@ -212,6 +212,58 @@ async def run_expiry_check_job() -> None:
         logger.error("[scheduler] Expiry check error: %s", e)
 
 
+# ── Portfolio forecast cache refresh job ────────────────────────────────────
+
+async def run_portfolio_cache_refresh_job() -> None:
+    """Nightly: refresh materialized views and re-populate the forecast cache
+    + insights for every (customer, warehouse) that has a trained global model.
+
+    Reads `ml_global_model_metadata` to find scopes; calls the ML service to
+    do the actual inference work (keeps the heavy ML deps in one process).
+    """
+    logger.info("[scheduler] Running portfolio cache refresh …")
+    try:
+        from migrations import refresh_portfolio_materialized_views
+        refresh_portfolio_materialized_views()
+
+        from sqlalchemy import text
+        from db import engine
+        with engine.connect() as conn:
+            scopes = conn.execute(text("""
+                SELECT business_id, customer_id, warehouse_id
+                FROM ml_global_model_metadata
+                WHERE status = 'ready'
+            """)).mappings().all()
+
+        if not scopes:
+            logger.info("[scheduler] No trained global models — nothing to refresh.")
+            return
+
+        ml_url = os.getenv("ML_SERVICE_URL", "http://127.0.0.1:8100")
+        import httpx
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            for s in scopes:
+                params = {
+                    "business_id": s["business_id"],
+                    "customer_id": s["customer_id"],
+                    "warehouse_id": s["warehouse_id"],
+                    "days_ahead": 30,
+                }
+                try:
+                    resp = await client.post(f"{ml_url}/portfolio/cache/refresh", params=params)
+                    if resp.status_code >= 400:
+                        logger.error(
+                            "[scheduler] cache refresh failed for %s: %s",
+                            dict(s), resp.text,
+                        )
+                except Exception as exc:
+                    logger.error("[scheduler] cache refresh error for %s: %s", dict(s), exc)
+
+        logger.info("[scheduler] Portfolio cache refresh complete (%d scopes).", len(scopes))
+    except Exception as exc:
+        logger.error("[scheduler] Portfolio cache job error: %s", exc)
+
+
 # ── Scheduler factory ─────────────────────────────────────────────────────────
 
 def create_scheduler() -> AsyncIOScheduler:
@@ -228,6 +280,13 @@ def create_scheduler() -> AsyncIOScheduler:
         trigger="interval",
         hours=24,
         id="stock_expiry_check",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        run_portfolio_cache_refresh_job,
+        trigger="cron",
+        hour=2, minute=0,
+        id="portfolio_cache_refresh",
         replace_existing=True,
     )
     return scheduler

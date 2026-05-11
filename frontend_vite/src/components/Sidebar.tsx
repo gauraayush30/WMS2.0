@@ -14,6 +14,7 @@ import {
   Truck,
   Store,
   ShoppingCart,
+  Brain,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -40,6 +41,7 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { to: "/customers", icon: Briefcase, label: "Customers", roles: ["warehouse_admin", "warehouse_staff"] },
   { to: "/warehouses", icon: WarehouseIcon, label: "Warehouses", roles: ["warehouse_admin", "warehouse_staff"] },
   { to: "/business", icon: Building2, label: "Business", roles: ["warehouse_admin"] },
+  { to: "/forecast/portfolio", icon: Brain, label: "Portfolio AI" },
   { to: "/reports", icon: FileBarChart, label: "Reports" },
   { to: "/users", icon: Users, label: "Users", roles: ["warehouse_admin"] },
 ];

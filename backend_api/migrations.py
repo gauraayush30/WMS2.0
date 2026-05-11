@@ -870,6 +870,178 @@ def create_buyer_locations_table() -> None:
     print("[migrations] buyer_locations table is ready.")
 
 
+# ── WMS 2.0 v8: Portfolio / Global ML model + forecast cache ────────────────
+
+def create_ml_global_model_metadata_table() -> None:
+    """Tracks the global per-(customer, warehouse) demand model.
+
+    One row per (business_id, customer_id, warehouse_id). Coexists with the
+    legacy per-product ml_model_metadata table for backwards compatibility.
+    """
+    query = text("""
+        CREATE TABLE IF NOT EXISTS ml_global_model_metadata (
+            id                  SERIAL          PRIMARY KEY,
+            business_id         INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            customer_id         INTEGER         NOT NULL REFERENCES customers(id)  ON DELETE CASCADE,
+            warehouse_id        INTEGER         NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+            model_path          VARCHAR(500)    NOT NULL,
+            trained_at          TIMESTAMPTZ     NOT NULL,
+            data_start_date     DATE,
+            data_end_date       DATE,
+            total_data_points   INTEGER,
+            n_products          INTEGER,
+            n_buyers            INTEGER,
+            n_sellers           INTEGER,
+            cv_mae              DECIMAL(10, 2),
+            cv_mape             DECIMAL(10, 2),
+            features_used       TEXT[]          DEFAULT '{}',
+            status              VARCHAR(20)     NOT NULL DEFAULT 'ready',
+            created_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            UNIQUE(business_id, customer_id, warehouse_id)
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] ml_global_model_metadata table is ready.")
+
+
+def create_ml_forecast_cache_table() -> None:
+    """Stores P10/P50/P90 forecasts produced by the global model.
+
+    Populated by the nightly cache-refresh job; portfolio APIs read from
+    here and never call live inference.
+    """
+    query = text("""
+        CREATE TABLE IF NOT EXISTS ml_forecast_cache (
+            id              BIGSERIAL       PRIMARY KEY,
+            business_id     INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            customer_id     INTEGER         NOT NULL REFERENCES customers(id)  ON DELETE CASCADE,
+            warehouse_id    INTEGER         NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+            product_id      INTEGER         NOT NULL REFERENCES products(id)   ON DELETE CASCADE,
+            buyer_id        INTEGER         REFERENCES buyers(id) ON DELETE SET NULL,
+            forecast_date   DATE            NOT NULL,
+            p10             DECIMAL(14, 4)  NOT NULL DEFAULT 0,
+            p50             DECIMAL(14, 4)  NOT NULL DEFAULT 0,
+            p90             DECIMAL(14, 4)  NOT NULL DEFAULT 0,
+            computed_at     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+        # buyer_id NULL = aggregate forecast across all buyers — partial
+        # unique indexes handle the NULL semantics Postgres needs.
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_ml_forecast_cache_agg_unique
+            ON ml_forecast_cache (business_id, customer_id, warehouse_id, product_id, forecast_date)
+            WHERE buyer_id IS NULL
+        """))
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_ml_forecast_cache_buyer_unique
+            ON ml_forecast_cache (business_id, customer_id, warehouse_id, product_id, buyer_id, forecast_date)
+            WHERE buyer_id IS NOT NULL
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_ml_forecast_cache_lookup
+            ON ml_forecast_cache (business_id, customer_id, warehouse_id, forecast_date)
+        """))
+    print("[migrations] ml_forecast_cache table is ready.")
+
+
+def create_ml_insights_cache_table() -> None:
+    """Stores ranked, actionable portfolio insights for the UI."""
+    query = text("""
+        CREATE TABLE IF NOT EXISTS ml_insights_cache (
+            id              BIGSERIAL       PRIMARY KEY,
+            business_id     INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            customer_id     INTEGER         NOT NULL REFERENCES customers(id)  ON DELETE CASCADE,
+            warehouse_id    INTEGER         NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+            insight_type    VARCHAR(50)     NOT NULL,
+            severity        VARCHAR(20)     NOT NULL,
+            product_id      INTEGER         REFERENCES products(id) ON DELETE CASCADE,
+            entity_type     VARCHAR(20),
+            entity_id       INTEGER,
+            message         TEXT            NOT NULL,
+            value           DECIMAL(14, 4),
+            threshold       DECIMAL(14, 4),
+            meta            JSONB           NOT NULL DEFAULT '{}'::jsonb,
+            computed_at     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_ml_insights_lookup
+            ON ml_insights_cache (business_id, customer_id, warehouse_id, computed_at DESC)
+        """))
+    print("[migrations] ml_insights_cache table is ready.")
+
+
+def create_portfolio_materialized_views() -> None:
+    """Materialized views for fast seller/buyer × product daily aggregates."""
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE MATERIALIZED VIEW IF NOT EXISTS mv_seller_product_daily AS
+            SELECT
+                io.business_id,
+                io.customer_id,
+                io.warehouse_id,
+                io.supplier_id            AS seller_id,
+                il.product_id,
+                DATE(io.received_at)      AS date,
+                SUM(il.received_qty)::INT AS inbound_qty,
+                AVG(il.unit_cost)         AS avg_unit_cost
+            FROM inbound_lines il
+            JOIN inbound_orders io ON io.id = il.inbound_id
+            WHERE io.status = 'received' AND io.supplier_id IS NOT NULL
+            GROUP BY io.business_id, io.customer_id, io.warehouse_id,
+                     io.supplier_id, il.product_id, DATE(io.received_at);
+        """))
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_mv_seller_product_daily_uniq
+            ON mv_seller_product_daily
+            (business_id, customer_id, warehouse_id, seller_id, product_id, date);
+        """))
+
+        conn.execute(text("""
+            CREATE MATERIALIZED VIEW IF NOT EXISTS mv_buyer_product_daily AS
+            SELECT
+                oo.business_id,
+                oo.customer_id,
+                oo.warehouse_id,
+                oo.buyer_id,
+                ol.product_id,
+                DATE(oo.shipped_at)       AS date,
+                SUM(op.qty)::INT          AS outbound_qty,
+                AVG(op.unit_cost)         AS avg_cogs
+            FROM outbound_picks op
+            JOIN outbound_lines ol  ON ol.id = op.outbound_line_id
+            JOIN outbound_orders oo ON oo.id = ol.outbound_id
+            WHERE oo.status = 'shipped' AND oo.buyer_id IS NOT NULL
+            GROUP BY oo.business_id, oo.customer_id, oo.warehouse_id,
+                     oo.buyer_id, ol.product_id, DATE(oo.shipped_at);
+        """))
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_mv_buyer_product_daily_uniq
+            ON mv_buyer_product_daily
+            (business_id, customer_id, warehouse_id, buyer_id, product_id, date);
+        """))
+    print("[migrations] portfolio materialized views are ready.")
+
+
+def refresh_portfolio_materialized_views() -> None:
+    """Refresh both materialized views; CONCURRENTLY when possible."""
+    for view in ("mv_seller_product_daily", "mv_buyer_product_daily"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view}"))
+        except Exception:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(f"REFRESH MATERIALIZED VIEW {view}"))
+            except Exception as e:
+                print(f"[migrations] refresh {view} failed: {e}")
+
+
 def create_seller_locations_table() -> None:
     """Multiple locations per seller (supplier)."""
     query = text("""
@@ -936,5 +1108,11 @@ def run_all() -> None:
     # ── v7: buyer/seller locations ───────────────────────────────────────────
     create_buyer_locations_table()
     create_seller_locations_table()
+
+    # ── v8: portfolio (global ML model + cache + materialized views) ────────
+    create_ml_global_model_metadata_table()
+    create_ml_forecast_cache_table()
+    create_ml_insights_cache_table()
+    create_portfolio_materialized_views()
 
     print("[migrations] All migrations complete.")
