@@ -26,6 +26,7 @@ from portfolio import (
     get_seller_detail,
     get_buyer_detail,
     get_location_heatmap,
+    get_outbound_forecast,
 )
 from insights import compute_portfolio_insights
 from seller_analytics import compute_seller_metrics
@@ -240,6 +241,20 @@ def seller_metrics(
 
 
 # ── Cache refresh (manual trigger; also called by nightly job) ──────────────
+
+@router.get("/outbound-forecast")
+def outbound_forecast(
+    business_id: int = Query(...),
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+    days_ahead: int = Query(30, ge=7, le=30),
+):
+    """Day-wise, buyer-wise, and location-wise outbound forecast for the next N days."""
+    try:
+        return get_outbound_forecast(business_id, customer_id, warehouse_id, days_ahead)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"outbound-forecast failed: {exc}")
+
 
 @router.post("/cache/refresh")
 def cache_refresh(

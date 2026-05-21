@@ -385,3 +385,138 @@ def get_location_heatmap(
     ]
     locations.sort(key=lambda x: x["qty"], reverse=True)
     return {"mode": mode, "period_days": period_days, "locations": locations}
+
+
+def get_outbound_forecast(
+    business_id: int,
+    customer_id: int,
+    warehouse_id: int,
+    days_ahead: int = 30,
+) -> dict:
+    """Return structured outbound forecast for the next days_ahead days.
+
+    Uses the pre-computed ml_forecast_cache (populated by cache/refresh).
+
+    Returns:
+      daily_total  – day-wise P10 / P50 / P90 summed across all products
+      by_buyer     – per-buyer day-wise P50 + totals, ordered by total desc
+      by_location  – per-city/state day-wise P50 aggregated from buyer data
+    """
+    today = date.today()
+    start = today + timedelta(days=1)
+    end   = today + timedelta(days=days_ahead)
+
+    # All cache rows for the window (aggregate + per-buyer)
+    all_fc = get_forecast_cache(
+        business_id, customer_id, warehouse_id,
+        start_date=start, end_date=end,
+    )
+
+    empty = {
+        "days_ahead": days_ahead,
+        "daily_total": [],
+        "by_buyer": [],
+        "by_location": [],
+    }
+    if all_fc.empty:
+        return empty
+
+    all_fc["forecast_date"] = pd.to_datetime(all_fc["forecast_date"]).dt.date
+
+    # ── 1. Daily totals: aggregate rows (buyer_id IS NULL) summed per date ──
+    agg_fc = all_fc[all_fc["buyer_id"].isna()]
+    if agg_fc.empty:
+        daily_total = []
+    else:
+        dt = (
+            agg_fc.groupby("forecast_date")[["p10", "p50", "p90"]]
+            .sum()
+            .reset_index()
+            .sort_values("forecast_date")
+        )
+        daily_total = [
+            {
+                "date": str(r["forecast_date"]),
+                "p10":  round(float(r["p10"]),  1),
+                "p50":  round(float(r["p50"]),  1),
+                "p90":  round(float(r["p90"]),  1),
+            }
+            for _, r in dt.iterrows()
+        ]
+
+    # ── 2. Per-buyer: sum products per (buyer_id, date) ──
+    buyer_fc = all_fc[all_fc["buyer_id"].notna()].copy()
+    buyer_fc["buyer_id"] = buyer_fc["buyer_id"].astype(int)
+
+    buyers_info = get_all_buyers(business_id, customer_id)
+    buyer_map = {b["id"]: b for b in buyers_info}
+
+    by_buyer: dict[int, dict] = {}
+    if not buyer_fc.empty:
+        bd = (
+            buyer_fc.groupby(["buyer_id", "forecast_date"])["p50"]
+            .sum()
+            .reset_index()
+        )
+        for _, r in bd.iterrows():
+            bid  = int(r["buyer_id"])
+            binfo = buyer_map.get(bid, {})
+            p50  = round(float(r["p50"]), 1)
+            if bid not in by_buyer:
+                by_buyer[bid] = {
+                    "buyer_id":   bid,
+                    "buyer_name": binfo.get("name") or f"Buyer {bid}",
+                    "city":       binfo.get("city")  or "",
+                    "state":      binfo.get("state") or "",
+                    "total_p50":  0.0,
+                    "daily":      [],
+                }
+            by_buyer[bid]["total_p50"] += p50
+            by_buyer[bid]["daily"].append({"date": str(r["forecast_date"]), "p50": p50})
+
+    for b in by_buyer.values():
+        b["total_p50"] = round(b["total_p50"], 1)
+        b["daily"].sort(key=lambda x: x["date"])
+
+    by_buyer_list = sorted(by_buyer.values(), key=lambda x: -x["total_p50"])
+
+    # ── 3. By location: aggregate buyer daily totals by city / state ──
+    loc_map: dict[str, dict] = {}
+    for b in by_buyer_list:
+        city  = b["city"]  or "Unknown"
+        state = b["state"] or "Unknown"
+        key   = f"{city}||{state}"
+        if key not in loc_map:
+            loc_map[key] = {
+                "city":        city,
+                "state":       state,
+                "buyer_ids":   set(),
+                "total_p50":   0.0,
+                "daily":       {},
+            }
+        loc = loc_map[key]
+        loc["buyer_ids"].add(b["buyer_id"])
+        loc["total_p50"] += b["total_p50"]
+        for day in b["daily"]:
+            loc["daily"][day["date"]] = loc["daily"].get(day["date"], 0.0) + day["p50"]
+
+    by_location = [
+        {
+            "city":        v["city"],
+            "state":       v["state"],
+            "buyer_count": len(v["buyer_ids"]),
+            "total_p50":   round(v["total_p50"], 1),
+            "daily": [
+                {"date": d, "p50": round(p, 1)}
+                for d, p in sorted(v["daily"].items())
+            ],
+        }
+        for v in sorted(loc_map.values(), key=lambda x: -x["total_p50"])
+    ]
+
+    return {
+        "days_ahead":  days_ahead,
+        "daily_total": daily_total,
+        "by_buyer":    by_buyer_list,
+        "by_location": by_location,
+    }

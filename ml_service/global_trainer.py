@@ -154,11 +154,12 @@ def train_global_model(
         _p("building_features", detail=f"{len(panel)} rows")
         feat_df = add_panel_features(panel)
 
-        # Drop rows where lag features are still null (first ~30 days per pair)
+        # Drop the first `warm` rows per (product, buyer) where lag features are null.
+        # Vectorised approach avoids pandas 3.0 groupby.apply include_groups removal.
         warm = 14
-        feat_df = feat_df.groupby(["product_id", "buyer_id"], group_keys=False).apply(
-            lambda g: g.iloc[warm:] if len(g) > warm * 2 else g
-        )
+        _cum   = feat_df.groupby(["product_id", "buyer_id"]).cumcount()
+        _sizes = feat_df.groupby(["product_id", "buyer_id"])["outbound_qty"].transform("size")
+        feat_df = feat_df[(_sizes <= warm * 2) | (_cum >= warm)].copy()
         if feat_df.empty:
             raise ValueError("Not enough history per (product, buyer) after warmup")
 

@@ -136,10 +136,10 @@ def add_panel_features(panel: pd.DataFrame) -> pd.DataFrame:
     df["qty_lag_7"]  = grp.shift(7)
     df["qty_lag_14"] = grp.shift(14)
     df["qty_lag_30"] = grp.shift(30)
-    df["qty_roll_7d"]  = grp.shift(1).rolling(7,  min_periods=1).mean().reset_index(level=[0, 1], drop=True)
-    df["qty_roll_14d"] = grp.shift(1).rolling(14, min_periods=1).mean().reset_index(level=[0, 1], drop=True)
-    df["qty_roll_30d"] = grp.shift(1).rolling(30, min_periods=1).mean().reset_index(level=[0, 1], drop=True)
-    df["qty_roll_7d_std"] = grp.shift(1).rolling(7, min_periods=1).std().reset_index(level=[0, 1], drop=True)
+    df["qty_roll_7d"]     = grp.transform(lambda s: s.shift(1).rolling(7,  min_periods=1).mean())
+    df["qty_roll_14d"]    = grp.transform(lambda s: s.shift(1).rolling(14, min_periods=1).mean())
+    df["qty_roll_30d"]    = grp.transform(lambda s: s.shift(1).rolling(30, min_periods=1).mean())
+    df["qty_roll_7d_std"] = grp.transform(lambda s: s.shift(1).rolling(7,  min_periods=1).std())
 
     # days since this (product, buyer) last had a non-zero order
     def _days_since(s: pd.Series) -> pd.Series:
@@ -159,8 +159,8 @@ def add_panel_features(panel: pd.DataFrame) -> pd.DataFrame:
     prod_daily = df.groupby(["product_id", "date"])["outbound_qty"].sum().reset_index()
     prod_daily = prod_daily.sort_values(["product_id", "date"])
     pgrp = prod_daily.groupby("product_id")["outbound_qty"]
-    prod_daily["product_roll_7d"]  = pgrp.shift(1).rolling(7,  min_periods=1).mean().reset_index(level=0, drop=True)
-    prod_daily["product_roll_30d"] = pgrp.shift(1).rolling(30, min_periods=1).mean().reset_index(level=0, drop=True)
+    prod_daily["product_roll_7d"]  = pgrp.transform(lambda s: s.shift(1).rolling(7,  min_periods=1).mean())
+    prod_daily["product_roll_30d"] = pgrp.transform(lambda s: s.shift(1).rolling(30, min_periods=1).mean())
     df = df.merge(
         prod_daily[["product_id", "date", "product_roll_7d", "product_roll_30d"]],
         on=["product_id", "date"], how="left",

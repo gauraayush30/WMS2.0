@@ -224,6 +224,21 @@ async def seller_metrics(
     )
 
 
+@router.get("/outbound-forecast")
+async def outbound_forecast(
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+    days_ahead: int = Query(30, ge=7, le=30),
+    ctx: UserContext = Depends(get_user_context),
+):
+    """Day-wise, buyer-wise, and location-wise outbound forecast for the next N days."""
+    biz, cust, wh = _resolve_scope(ctx, customer_id, warehouse_id)
+    return await _ml_get(
+        "/portfolio/outbound-forecast",
+        _params(biz, cust, wh, days_ahead=days_ahead),
+    )
+
+
 @router.post("/cache/refresh")
 async def cache_refresh(
     customer_id: int = Query(...),
