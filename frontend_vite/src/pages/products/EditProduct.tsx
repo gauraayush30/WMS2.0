@@ -9,6 +9,14 @@ import { Label } from "@/components/ui/label";
 import { Alert } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+import { UOM_OPTIONS } from "@/lib/uomOptions";
 
 interface Product {
   id: number;
@@ -56,7 +64,6 @@ export default function EditProduct() {
     location_bin: "",
   });
   const [formError, setFormError] = useState("");
-  const [formSuccess, setFormSuccess] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -92,7 +99,6 @@ export default function EditProduct() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
-    setFormSuccess("");
     if (!form.name.trim() || !form.sku_code.trim()) {
       setFormError("Name and SKU Code are required");
       return;
@@ -124,7 +130,7 @@ export default function EditProduct() {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Failed to update product");
       }
-      setFormSuccess("Product updated successfully!");
+      navigate(`/products/${id}`);
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : "Error");
     } finally {
@@ -158,7 +164,6 @@ export default function EditProduct() {
         </CardHeader>
         <CardContent>
           {formError && <Alert variant="destructive" className="mb-4">{formError}</Alert>}
-          {formSuccess && <Alert variant="success" className="mb-4">{formSuccess}</Alert>}
 
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -176,7 +181,18 @@ export default function EditProduct() {
               </div>
               <div className="space-y-1.5">
                 <Label>Unit of Measurement</Label>
-                <Input value={form.uom} onChange={(e) => set("uom", e.target.value)} />
+                <Select value={form.uom} onValueChange={(v) => set("uom", v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select unit…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {UOM_OPTIONS.map((u) => (
+                      <SelectItem key={u.value} value={u.value}>
+                        {u.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 

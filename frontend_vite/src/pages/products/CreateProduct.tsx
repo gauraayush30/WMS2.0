@@ -29,6 +29,14 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { motion } from "framer-motion";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+import { UOM_OPTIONS } from "@/lib/uomOptions";
 
 /* ── Types ──────────────────────────────────────────────── */
 interface CsvRow {
@@ -416,12 +424,18 @@ export default function CreateProduct() {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="uom">Unit of Measurement</Label>
-                      <Input
-                        id="uom"
-                        placeholder="e.g. pcs, kg, litre"
-                        value={form.uom}
-                        onChange={(e) => set("uom", e.target.value)}
-                      />
+                      <Select value={form.uom} onValueChange={(v) => set("uom", v)}>
+                        <SelectTrigger id="uom">
+                          <SelectValue placeholder="Select unit…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {UOM_OPTIONS.map((u) => (
+                            <SelectItem key={u.value} value={u.value}>
+                              {u.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
 

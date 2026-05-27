@@ -3,6 +3,8 @@ import { useAuth, API } from "../context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Alert } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -11,7 +13,7 @@ import {
 } from "@/components/ui/table";
 import {
   Brain, AlertTriangle, RefreshCw, Store, ShoppingCart,
-  MapPin, Lightbulb, Package, TrendingUp, BarChart2, List,
+  MapPin, Lightbulb, Package, TrendingUp, BarChart2, List, ChevronDown, ChevronRight, PackageCheck,
 } from "lucide-react";
 import {
   BarChart, Bar,
@@ -19,6 +21,20 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer,
   ScatterChart, Scatter, ZAxis, Legend, Cell,
 } from "recharts";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function todayISO(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+function plusDaysISO(days: number): string {
+  return new Date(Date.now() + days * 86400000).toISOString().split("T")[0];
+}
+
+function fmtINR(v: number): string {
+  return `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -114,11 +130,20 @@ interface TrainProgress {
   error: string | null;
 }
 
+// ── Outbound Forecast Interfaces (with valuation) ────────────────────────────
+
 interface DayTotal {
   date: string;
   p10: number;
   p50: number;
   p90: number;
+  value_p50: number;
+}
+
+interface BuyerForecastDay {
+  date: string;
+  p50: number;
+  value: number;
 }
 
 interface BuyerForecast {
@@ -127,7 +152,8 @@ interface BuyerForecast {
   city: string;
   state: string;
   total_p50: number;
-  daily: { date: string; p50: number }[];
+  total_value: number;
+  daily: BuyerForecastDay[];
 }
 
 interface LocationForecast {
@@ -135,21 +161,106 @@ interface LocationForecast {
   state: string;
   buyer_count: number;
   total_p50: number;
-  daily: { date: string; p50: number }[];
+  total_value: number;
+  daily: { date: string; p50: number; value: number }[];
+}
+
+interface ProductBuyerForecastBuyer {
+  buyer_id: number;
+  buyer_name: string;
+  city: string;
+  state: string;
+  total_qty: number;
+  total_value: number;
+  daily: { date: string; qty: number; value: number }[];
+}
+
+interface ProductBuyerForecast {
+  product_id: number;
+  product_name: string;
+  sku_code: string | null;
+  uom: string;
+  price: number;
+  total_qty: number;
+  total_value: number;
+  buyers: ProductBuyerForecastBuyer[];
 }
 
 interface OutboundForecastData {
-  days_ahead: number;
+  start_date: string;
+  end_date: string;
   daily_total: DayTotal[];
   by_buyer: BuyerForecast[];
   by_location: LocationForecast[];
+  by_product_buyer: ProductBuyerForecast[];
+}
+
+// ── Inbound Forecast Interfaces ───────────────────────────────────────────────
+
+interface InboundDayTotal {
+  date: string;
+  p10: number;
+  p50: number;
+  p90: number;
+  value_p50: number;
+}
+
+interface SellerForecastDay { date: string; p50: number; value: number; }
+
+interface SellerForecast {
+  seller_id: number;
+  seller_name: string;
+  city: string;
+  state: string;
+  total_p50: number;
+  total_value: number;
+  daily: SellerForecastDay[];
+}
+
+interface InboundLocationForecast {
+  city: string;
+  state: string;
+  seller_count: number;
+  total_p50: number;
+  total_value: number;
+  daily: { date: string; p50: number; value: number }[];
+}
+
+interface ProductSellerForecastSeller {
+  seller_id: number;
+  seller_name: string;
+  city: string;
+  state: string;
+  total_qty: number;
+  total_value: number;
+  daily: { date: string; qty: number; value: number }[];
+}
+
+interface ProductSellerForecast {
+  product_id: number;
+  product_name: string;
+  sku_code: string | null;
+  uom: string;
+  avg_unit_cost: number;
+  total_qty: number;
+  total_value: number;
+  sellers: ProductSellerForecastSeller[];
+}
+
+interface InboundForecastData {
+  start_date: string;
+  end_date: string;
+  note: "historical_projection" | "no_history";
+  daily_total: InboundDayTotal[];
+  by_seller: SellerForecast[];
+  by_location: InboundLocationForecast[];
+  by_product_seller: ProductSellerForecast[];
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ForecastPortfolioPage() {
   const { authFetch, effectiveCustomerId, selectedWarehouseId } = useAuth();
-  console.log("effectiveCustomerId", effectiveCustomerId, "selectedWarehouseId", selectedWarehouseId);
   const [periodDays, setPeriodDays] = useState<number>(90);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [insights, setInsights] = useState<Insight[]>([]);
@@ -160,8 +271,13 @@ export default function ForecastPortfolioPage() {
   const [training, setTraining] = useState<TrainProgress | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [forecastData, setForecastData] = useState<OutboundForecastData | null>(null);
-  const [forecastDays, setForecastDays] = useState<7 | 30>(30);
   const [forecastLoading, setForecastLoading] = useState(false);
+  const [forecastStart, setForecastStart] = useState<string>(todayISO());
+  const [forecastEnd,   setForecastEnd]   = useState<string>(plusDaysISO(30));
+  const [inboundData,    setInboundData]    = useState<InboundForecastData | null>(null);
+  const [inboundLoading, setInboundLoading] = useState(false);
+  const [inboundStart,   setInboundStart]   = useState<string>(todayISO());
+  const [inboundEnd,     setInboundEnd]     = useState<string>(plusDaysISO(30));
 
   const scopeReady = effectiveCustomerId != null && selectedWarehouseId != null;
 
@@ -188,19 +304,11 @@ export default function ForecastPortfolioPage() {
         authFetch(buildUrl("/forecast/portfolio/location-heatmap", { mode: locationMode, period_days: periodDays })),
       ]);
       if (!s.ok) throw new Error(`summary failed (${s.status})`);
-      const sj = await s.json();
-      setSummary(sj);
-      if (i.ok) {
-        const ij = await i.json();
-        setInsights(ij.insights || []);
-      }
-      if (l.ok) {
-        const lj = await l.json();
-        setLocations(lj.locations || []);
-      }
+      setSummary(await s.json());
+      if (i.ok) setInsights((await i.json()).insights || []);
+      if (l.ok) setLocations((await l.json()).locations || []);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -241,25 +349,42 @@ export default function ForecastPortfolioPage() {
     if (!scopeReady) return;
     setRefreshing(true);
     try {
-      await authFetch(buildUrl("/forecast/portfolio/cache/refresh", { days_ahead: 30 }), { method: "POST" });
+      await authFetch(buildUrl("/forecast/portfolio/cache/refresh", { days_ahead: 60 }), { method: "POST" });
       await fetchAll();
     } finally {
       setRefreshing(false);
     }
   };
 
-  const fetchForecast = useCallback(async (days: 7 | 30) => {
-    if (!scopeReady) return;
+  const fetchForecast = useCallback(async (start: string, end: string) => {
+    if (!scopeReady || !start || !end) return;
     setForecastLoading(true);
     try {
-      const r = await authFetch(buildUrl("/forecast/portfolio/outbound-forecast", { days_ahead: days }));
+      const r = await authFetch(
+        buildUrl("/forecast/portfolio/outbound-forecast", { start_date: start, end_date: end })
+      );
       if (r.ok) setForecastData(await r.json());
     } finally {
       setForecastLoading(false);
     }
   }, [authFetch, buildUrl, scopeReady]);
 
-  useEffect(() => { fetchForecast(forecastDays); }, [fetchForecast, forecastDays]);
+  useEffect(() => { fetchForecast(forecastStart, forecastEnd); }, [fetchForecast, forecastStart, forecastEnd]);
+
+  const fetchInboundForecast = useCallback(async (start: string, end: string) => {
+    if (!scopeReady || !start || !end) return;
+    setInboundLoading(true);
+    try {
+      const r = await authFetch(
+        buildUrl("/forecast/portfolio/inbound-forecast", { start_date: start, end_date: end })
+      );
+      if (r.ok) setInboundData(await r.json());
+    } finally {
+      setInboundLoading(false);
+    }
+  }, [authFetch, buildUrl, scopeReady]);
+
+  useEffect(() => { fetchInboundForecast(inboundStart, inboundEnd); }, [fetchInboundForecast, inboundStart, inboundEnd]);
 
   // ── Render guards ────────────────────────────────────────────────────
   if (!scopeReady) {
@@ -341,24 +466,21 @@ export default function ForecastPortfolioPage() {
           <TabsTrigger value="locations"><MapPin className="h-4 w-4 mr-1" /> Locations</TabsTrigger>
           <TabsTrigger value="insights"><Lightbulb className="h-4 w-4 mr-1" /> Insights</TabsTrigger>
           <TabsTrigger value="forecast"><TrendingUp className="h-4 w-4 mr-1" /> Outbound Forecast</TabsTrigger>
+          <TabsTrigger value="inbound"><PackageCheck className="h-4 w-4 mr-1" /> Inbound Forecast</TabsTrigger>
         </TabsList>
 
-        {/* PRODUCTS */}
         <TabsContent value="products">
           <ProductsTable products={summary?.products ?? []} loading={loading} />
         </TabsContent>
 
-        {/* SELLERS */}
         <TabsContent value="sellers">
           <SellersPanel sellers={summary?.sellers ?? []} loading={loading} />
         </TabsContent>
 
-        {/* BUYERS */}
         <TabsContent value="buyers">
           <BuyersPanel buyers={summary?.buyers ?? []} loading={loading} />
         </TabsContent>
 
-        {/* LOCATIONS */}
         <TabsContent value="locations">
           <LocationsPanel
             locations={locations}
@@ -368,18 +490,29 @@ export default function ForecastPortfolioPage() {
           />
         </TabsContent>
 
-        {/* INSIGHTS */}
         <TabsContent value="insights">
           <InsightsFeed insights={insights} loading={loading} />
         </TabsContent>
 
-        {/* OUTBOUND FORECAST */}
         <TabsContent value="forecast">
           <OutboundForecastPanel
             data={forecastData}
             loading={forecastLoading}
-            days={forecastDays}
-            onDaysChange={(d) => setForecastDays(d)}
+            startDate={forecastStart}
+            endDate={forecastEnd}
+            onStartChange={setForecastStart}
+            onEndChange={setForecastEnd}
+          />
+        </TabsContent>
+
+        <TabsContent value="inbound">
+          <InboundForecastPanel
+            data={inboundData}
+            loading={inboundLoading}
+            startDate={inboundStart}
+            endDate={inboundEnd}
+            onStartChange={setInboundStart}
+            onEndChange={setInboundEnd}
           />
         </TabsContent>
       </Tabs>
@@ -704,52 +837,48 @@ function fmtDate(iso: string): string {
 }
 
 function OutboundForecastPanel({
-  data, loading, days, onDaysChange,
+  data, loading, startDate, endDate, onStartChange, onEndChange,
 }: {
   data: OutboundForecastData | null;
   loading: boolean;
-  days: 7 | 30;
-  onDaysChange: (d: 7 | 30) => void;
+  startDate: string;
+  endDate: string;
+  onStartChange: (d: string) => void;
+  onEndChange: (d: string) => void;
 }) {
   const [view, setView] = useState<"chart" | "table">("chart");
-  const [section, setSection] = useState<"daily" | "buyer" | "location">("daily");
+  const [section, setSection] = useState<"daily" | "buyer" | "location" | "product">("product");
+  const today = todayISO();
 
   if (loading) return <Skeleton className="h-96 w-full" />;
-  if (!data || (!data.daily_total.length && !data.by_buyer.length)) {
+  if (!data || (!data.daily_total.length && !data.by_buyer.length && !data.by_product_buyer.length)) {
     return (
-      <Card>
-        <CardContent className="py-12 text-center text-muted-foreground">
-          No forecast data available — train the global model and refresh the cache first.
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        <DateRangeControls
+          startDate={startDate} endDate={endDate} today={today}
+          onStartChange={onStartChange} onEndChange={onEndChange}
+        />
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            No forecast data available — train the global model and refresh the cache first.
+          </CardContent>
+        </Card>
+      </div>
     );
   }
-
-  // Slice to requested period
-  const dailySlice = data.daily_total.slice(0, days);
-  const buyerSlice = data.by_buyer.map((b) => ({
-    ...b,
-    daily: b.daily.slice(0, days),
-    total_p50: b.daily.slice(0, days).reduce((s, d) => s + d.p50, 0),
-  })).sort((a, b) => b.total_p50 - a.total_p50);
-  const locSlice = data.by_location.map((l) => ({
-    ...l,
-    daily: l.daily.slice(0, days),
-    total_p50: l.daily.slice(0, days).reduce((s, d) => s + d.p50, 0),
-  })).sort((a, b) => b.total_p50 - a.total_p50);
 
   return (
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex gap-2">
-          {([7, 30] as const).map((d) => (
-            <Button key={d} size="sm" variant={days === d ? "default" : "outline"} onClick={() => onDaysChange(d)}>
-              Next {d} days
-            </Button>
-          ))}
-        </div>
-        <div className="flex gap-2">
+        <DateRangeControls
+          startDate={startDate} endDate={endDate} today={today}
+          onStartChange={onStartChange} onEndChange={onEndChange}
+        />
+        <div className="flex gap-2 flex-wrap">
+          <Button size="sm" variant={section === "product" ? "default" : "outline"} onClick={() => setSection("product")}>
+            <Package className="h-4 w-4 mr-1" /> By Product
+          </Button>
           <Button size="sm" variant={section === "daily" ? "default" : "outline"} onClick={() => setSection("daily")}>
             <TrendingUp className="h-4 w-4 mr-1" /> Daily Total
           </Button>
@@ -770,38 +899,205 @@ function OutboundForecastPanel({
         </div>
       </div>
 
-      {/* Daily Total */}
+      {section === "product" && (
+        data.by_product_buyer.length === 0
+          ? <Card><CardContent className="py-12 text-center text-muted-foreground">No per-buyer product forecast data — refresh the cache.</CardContent></Card>
+          : view === "chart"
+            ? <ProductBuyerForecastChart products={data.by_product_buyer} />
+            : <ProductBuyerForecastTable products={data.by_product_buyer} />
+      )}
+
       {section === "daily" && (
         view === "chart"
-          ? <DailyTotalChart data={dailySlice} />
-          : <DailyTotalTable data={dailySlice} />
+          ? <DailyTotalChart data={data.daily_total} />
+          : <DailyTotalTable data={data.daily_total} />
       )}
 
-      {/* By Buyer */}
       {section === "buyer" && (
         view === "chart"
-          ? <BuyerForecastChart buyers={buyerSlice} />
-          : <BuyerForecastTable buyers={buyerSlice} days={days} />
+          ? <BuyerForecastChart buyers={data.by_buyer} />
+          : <BuyerForecastTable buyers={data.by_buyer} />
       )}
 
-      {/* By Location */}
       {section === "location" && (
         view === "chart"
-          ? <LocationForecastChart locations={locSlice} />
-          : <LocationForecastTable locations={locSlice} days={days} />
+          ? <LocationForecastChart locations={data.by_location} />
+          : <LocationForecastTable locations={data.by_location} />
       )}
     </div>
   );
 }
 
-// ── Daily Total chart ────────────────────────────────────────────────────────
+function DateRangeControls({
+  startDate, endDate, today, onStartChange, onEndChange,
+}: {
+  startDate: string; endDate: string; today: string;
+  onStartChange: (d: string) => void; onEndChange: (d: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <Label className="text-xs text-muted-foreground">From</Label>
+      <Input
+        type="date"
+        className="w-36 h-8"
+        value={startDate}
+        min={today}
+        onChange={(e) => onStartChange(e.target.value)}
+      />
+      <Label className="text-xs text-muted-foreground">To</Label>
+      <Input
+        type="date"
+        className="w-36 h-8"
+        value={endDate}
+        min={startDate}
+        onChange={(e) => onEndChange(e.target.value)}
+      />
+    </div>
+  );
+}
+
+// ── Product × Buyer components ───────────────────────────────────────────────
+
+function ProductBuyerForecastChart({ products }: { products: ProductBuyerForecast[] }) {
+  const barData = products.map((p) => ({
+    name: p.sku_code ? `${p.sku_code}` : p.product_name,
+    full_name: p.product_name,
+    total_value: Math.round(p.total_value),
+    total_qty: Math.round(p.total_qty),
+    price: p.price,
+    uom: p.uom,
+  }));
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle>Forecasted value by product (₹)</CardTitle></CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={Math.max(260, products.length * 44)}>
+            <BarChart data={barData} layout="vertical" margin={{ left: 100, right: 80 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                type="number"
+                tick={{ fontSize: 11 }}
+                tickFormatter={(v: number) => v >= 1000 ? `₹${(v / 1000).toFixed(0)}k` : `₹${v}`}
+              />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={100} />
+              <RTooltip
+                formatter={(v: number, _n, p) =>
+                  [`${fmtINR(v)} · ${p.payload.total_qty} ${p.payload.uom} @ ₹${p.payload.price}`, p.payload.full_name]
+                }
+              />
+              <Bar dataKey="total_value" fill="#2563eb" radius={[0, 4, 4, 0]}>
+                {barData.map((_, i) => (
+                  <Cell key={i} fill={BUYER_COLORS[i % BUYER_COLORS.length]} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ProductBuyerForecastTable({ products }: { products: ProductBuyerForecast[] }) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggle = (id: number) =>
+    setExpanded((prev) => {
+      const s = new Set(prev);
+      s.has(id) ? s.delete(id) : s.add(id);
+      return s;
+    });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Forecasted value by product × buyer</CardTitle>
+        <p className="text-xs text-muted-foreground">Click a product row to expand buyer breakdown.</p>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-6"></TableHead>
+              <TableHead>SKU</TableHead>
+              <TableHead>Product</TableHead>
+              <TableHead className="text-right">UOM</TableHead>
+              <TableHead className="text-right">Unit Price</TableHead>
+              <TableHead className="text-right">Fcst Qty (P50)</TableHead>
+              <TableHead className="text-right">Fcst Value</TableHead>
+              <TableHead className="text-right">Buyers</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {products.map((p) => (
+              <>
+                <TableRow
+                  key={p.product_id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => toggle(p.product_id)}
+                >
+                  <TableCell className="text-muted-foreground">
+                    {expanded.has(p.product_id)
+                      ? <ChevronDown className="h-3.5 w-3.5" />
+                      : <ChevronRight className="h-3.5 w-3.5" />}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{p.sku_code ?? "—"}</TableCell>
+                  <TableCell className="font-medium">{p.product_name}</TableCell>
+                  <TableCell className="text-right tabular-nums text-xs text-muted-foreground">{p.uom}</TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">₹{p.price.toFixed(2)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{p.total_qty.toFixed(0)} <span className="text-xs text-muted-foreground">{p.uom}</span></TableCell>
+                  <TableCell className="text-right tabular-nums font-semibold">{fmtINR(p.total_value)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{p.buyers.length}</TableCell>
+                </TableRow>
+                {expanded.has(p.product_id) && p.buyers.map((b) => (
+                  <TableRow key={`${p.product_id}-${b.buyer_id}`} className="bg-muted/20">
+                    <TableCell />
+                    <TableCell />
+                    <TableCell className="pl-8 text-sm">
+                      <span className="font-medium">{b.buyer_name}</span>
+                      {(b.city || b.state) && (
+                        <span className="ml-1.5 text-xs text-muted-foreground">
+                          {[b.city, b.state].filter(Boolean).join(", ")}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell />
+                    <TableCell className="text-right tabular-nums text-sm">{b.total_qty.toFixed(0)} <span className="text-xs text-muted-foreground">{p.uom}</span></TableCell>
+                    <TableCell className="text-right tabular-nums text-sm">{fmtINR(b.total_value)}</TableCell>
+                    <TableCell />
+                  </TableRow>
+                ))}
+              </>
+            ))}
+            {products.length > 0 && (
+              <TableRow className="font-bold bg-muted/40">
+                <TableCell colSpan={4}>Total</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {products.reduce((s, p) => s + p.total_qty, 0).toFixed(0)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {fmtINR(products.reduce((s, p) => s + p.total_value, 0))}
+                </TableCell>
+                <TableCell />
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Daily Total chart / table ────────────────────────────────────────────────
 
 function DailyTotalChart({ data }: { data: DayTotal[] }) {
   const chartData = data.map((d) => ({ ...d, date: fmtDate(d.date) }));
-  const totalP50 = data.reduce((s, d) => s + d.p50, 0);
+  const totalP50    = data.reduce((s, d) => s + d.p50,       0);
+  const totalValue  = data.reduce((s, d) => s + d.value_p50, 0);
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card><CardContent className="pt-5">
           <div className="text-xs text-muted-foreground uppercase">Expected total</div>
           <div className="text-2xl font-bold tabular-nums">{totalP50.toFixed(0)}</div>
@@ -816,6 +1112,11 @@ function DailyTotalChart({ data }: { data: DayTotal[] }) {
           <div className="text-xs text-muted-foreground uppercase">High estimate</div>
           <div className="text-2xl font-bold tabular-nums">{data.reduce((s, d) => s + d.p90, 0).toFixed(0)}</div>
           <div className="text-xs text-muted-foreground">units (P90)</div>
+        </CardContent></Card>
+        <Card><CardContent className="pt-5">
+          <div className="text-xs text-muted-foreground uppercase">Forecast value</div>
+          <div className="text-2xl font-bold tabular-nums">{fmtINR(totalValue)}</div>
+          <div className="text-xs text-muted-foreground">at P50 (est.)</div>
         </CardContent></Card>
       </div>
       <Card>
@@ -857,6 +1158,7 @@ function DailyTotalTable({ data }: { data: DayTotal[] }) {
               <TableHead className="text-right">P10 (low)</TableHead>
               <TableHead className="text-right">P50 (expected)</TableHead>
               <TableHead className="text-right">P90 (high)</TableHead>
+              <TableHead className="text-right">Value P50</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -866,6 +1168,7 @@ function DailyTotalTable({ data }: { data: DayTotal[] }) {
                 <TableCell className="text-right tabular-nums text-muted-foreground">{d.p10.toFixed(0)}</TableCell>
                 <TableCell className="text-right tabular-nums font-semibold">{d.p50.toFixed(0)}</TableCell>
                 <TableCell className="text-right tabular-nums text-muted-foreground">{d.p90.toFixed(0)}</TableCell>
+                <TableCell className="text-right tabular-nums text-emerald-600">{fmtINR(d.value_p50)}</TableCell>
               </TableRow>
             ))}
             <TableRow className="font-bold bg-muted/40">
@@ -873,6 +1176,7 @@ function DailyTotalTable({ data }: { data: DayTotal[] }) {
               <TableCell className="text-right tabular-nums">{data.reduce((s, d) => s + d.p10, 0).toFixed(0)}</TableCell>
               <TableCell className="text-right tabular-nums">{data.reduce((s, d) => s + d.p50, 0).toFixed(0)}</TableCell>
               <TableCell className="text-right tabular-nums">{data.reduce((s, d) => s + d.p90, 0).toFixed(0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{fmtINR(data.reduce((s, d) => s + d.value_p50, 0))}</TableCell>
             </TableRow>
           </TableBody>
         </Table>
@@ -884,21 +1188,10 @@ function DailyTotalTable({ data }: { data: DayTotal[] }) {
 // ── By Buyer chart / table ───────────────────────────────────────────────────
 
 function BuyerForecastChart({ buyers }: { buyers: BuyerForecast[] }) {
-  // Build stacked bar data: one entry per date, keyed by buyer name
-  const allDates = buyers[0]?.daily.map((d) => d.date) ?? [];
-  const stackData = allDates.map((date) => {
-    const entry: Record<string, string | number> = { date: fmtDate(date) };
-    for (const b of buyers) {
-      const day = b.daily.find((d) => d.date === date);
-      entry[b.buyer_name] = day ? Math.round(day.p50) : 0;
-    }
-    return entry;
-  });
-
-  // Summary bars (total per buyer)
   const summaryData = buyers.map((b, i) => ({
     name: b.buyer_name,
-    total: Math.round(b.total_p50),
+    total_value: Math.round(b.total_value),
+    total_qty: Math.round(b.total_p50),
     location: [b.city, b.state].filter(Boolean).join(", ") || "Unknown",
     color: BUYER_COLORS[i % BUYER_COLORS.length],
   }));
@@ -906,15 +1199,23 @@ function BuyerForecastChart({ buyers }: { buyers: BuyerForecast[] }) {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader><CardTitle>Total forecast by buyer</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Forecast value by buyer (₹)</CardTitle></CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={summaryData} layout="vertical" margin={{ left: 140, right: 20 }}>
+          <ResponsiveContainer width="100%" height={Math.max(260, buyers.length * 44)}>
+            <BarChart data={summaryData} layout="vertical" margin={{ left: 140, right: 80 }}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" tick={{ fontSize: 11 }} />
+              <XAxis
+                type="number"
+                tick={{ fontSize: 11 }}
+                tickFormatter={(v: number) => v >= 1000 ? `₹${(v / 1000).toFixed(0)}k` : `₹${v}`}
+              />
               <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={140} />
-              <RTooltip formatter={(v: number) => [`${v} units`, "Expected"]} />
-              <Bar dataKey="total" radius={[0, 4, 4, 0]}>
+              <RTooltip
+                formatter={(v: number, _n, p) =>
+                  [`${fmtINR(v)} · ${p.payload.total_qty} units`, p.payload.location]
+                }
+              />
+              <Bar dataKey="total_value" radius={[0, 4, 4, 0]}>
                 {summaryData.map((entry, i) => (
                   <Cell key={i} fill={entry.color} />
                 ))}
@@ -923,42 +1224,25 @@ function BuyerForecastChart({ buyers }: { buyers: BuyerForecast[] }) {
           </ResponsiveContainer>
         </CardContent>
       </Card>
-      <Card>
-        <CardHeader><CardTitle>Daily outbound by buyer (stacked)</CardTitle></CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={stackData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <RTooltip />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              {buyers.map((b, i) => (
-                <Bar key={b.buyer_id} dataKey={b.buyer_name} stackId="a"
-                  fill={BUYER_COLORS[i % BUYER_COLORS.length]} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
     </div>
   );
 }
 
-function BuyerForecastTable({ buyers, days }: { buyers: BuyerForecast[]; days: number }) {
+function BuyerForecastTable({ buyers }: { buyers: BuyerForecast[] }) {
   const allDates = buyers[0]?.daily.map((d) => d.date) ?? [];
   return (
     <Card>
-      <CardHeader><CardTitle>Day-wise forecast per buyer</CardTitle></CardHeader>
+      <CardHeader><CardTitle>Forecast value per buyer</CardTitle></CardHeader>
       <CardContent className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Buyer</TableHead>
               <TableHead>Location</TableHead>
-              <TableHead className="text-right">Total ({days}d)</TableHead>
+              <TableHead className="text-right">Total Qty</TableHead>
+              <TableHead className="text-right">Total Value</TableHead>
               {allDates.map((d) => (
-                <TableHead key={d} className="text-right min-w-[70px]">{fmtDate(d)}</TableHead>
+                <TableHead key={d} className="text-right min-w-[80px]">{fmtDate(d)}</TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -972,12 +1256,13 @@ function BuyerForecastTable({ buyers, days }: { buyers: BuyerForecast[]; days: n
                 <TableCell className="text-sm text-muted-foreground">
                   {[b.city, b.state].filter(Boolean).join(", ") || "—"}
                 </TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">{b.total_p50.toFixed(0)}</TableCell>
+                <TableCell className="text-right tabular-nums">{b.total_p50.toFixed(0)}</TableCell>
+                <TableCell className="text-right tabular-nums font-semibold">{fmtINR(b.total_value)}</TableCell>
                 {allDates.map((date) => {
                   const day = b.daily.find((d) => d.date === date);
                   return (
                     <TableCell key={date} className="text-right tabular-nums text-sm">
-                      {day ? day.p50.toFixed(0) : "—"}
+                      {day ? fmtINR(day.value) : "—"}
                     </TableCell>
                   );
                 })}
@@ -986,12 +1271,13 @@ function BuyerForecastTable({ buyers, days }: { buyers: BuyerForecast[]; days: n
             <TableRow className="font-bold bg-muted/40">
               <TableCell colSpan={2}>Total</TableCell>
               <TableCell className="text-right tabular-nums">{buyers.reduce((s, b) => s + b.total_p50, 0).toFixed(0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{fmtINR(buyers.reduce((s, b) => s + b.total_value, 0))}</TableCell>
               {allDates.map((date) => (
                 <TableCell key={date} className="text-right tabular-nums">
-                  {buyers.reduce((s, b) => {
+                  {fmtINR(buyers.reduce((s, b) => {
                     const d = b.daily.find((x) => x.date === date);
-                    return s + (d?.p50 ?? 0);
-                  }, 0).toFixed(0)}
+                    return s + (d?.value ?? 0);
+                  }, 0))}
                 </TableCell>
               ))}
             </TableRow>
@@ -1007,34 +1293,25 @@ function BuyerForecastTable({ buyers, days }: { buyers: BuyerForecast[]; days: n
 function LocationForecastChart({ locations }: { locations: LocationForecast[] }) {
   const barData = locations.map((l) => ({
     name: [l.city, l.state].filter(Boolean).join(", ") || "Unknown",
-    total: Math.round(l.total_p50),
+    total_value: Math.round(l.total_value),
     buyers: l.buyer_count,
   }));
-
-  // Stacked area by location
-  const allDates = locations[0]?.daily.map((d) => d.date) ?? [];
-  const lineData = allDates.map((date) => {
-    const entry: Record<string, string | number> = { date: fmtDate(date) };
-    for (const l of locations) {
-      const name = [l.city, l.state].filter(Boolean).join(", ") || "Unknown";
-      const day = l.daily.find((d) => d.date === date);
-      entry[name] = day ? Math.round(day.p50) : 0;
-    }
-    return entry;
-  });
 
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader><CardTitle>Total forecast by location</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Forecast value by location (₹)</CardTitle></CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={280}>
             <BarChart data={barData} margin={{ top: 5, right: 20, left: 0, bottom: 40 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" interval={0} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <RTooltip formatter={(v: number, _n, p) => [`${v} units · ${p.payload.buyers} buyer(s)`, "Expected"]} />
-              <Bar dataKey="total" radius={[4, 4, 0, 0]}>
+              <YAxis
+                tick={{ fontSize: 11 }}
+                tickFormatter={(v: number) => v >= 1000 ? `₹${(v / 1000).toFixed(0)}k` : `₹${v}`}
+              />
+              <RTooltip formatter={(v: number, _n, p) => [`${fmtINR(v)} · ${p.payload.buyers} buyer(s)`, "Forecast value"]} />
+              <Bar dataKey="total_value" radius={[4, 4, 0, 0]}>
                 {barData.map((_, i) => (
                   <Cell key={i} fill={BUYER_COLORS[i % BUYER_COLORS.length]} />
                 ))}
@@ -1043,38 +1320,14 @@ function LocationForecastChart({ locations }: { locations: LocationForecast[] })
           </ResponsiveContainer>
         </CardContent>
       </Card>
-      {locations.length > 0 && allDates.length > 0 && (
-        <Card>
-          <CardHeader><CardTitle>Day-wise outbound by location (stacked)</CardTitle></CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={lineData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <RTooltip />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                {locations.map((l, i) => {
-                  const name = [l.city, l.state].filter(Boolean).join(", ") || "Unknown";
-                  return (
-                    <Bar key={name} dataKey={name} stackId="a"
-                      fill={BUYER_COLORS[i % BUYER_COLORS.length]} />
-                  );
-                })}
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }
 
-function LocationForecastTable({ locations, days }: { locations: LocationForecast[]; days: number }) {
-  const allDates = locations[0]?.daily.map((d) => d.date) ?? [];
+function LocationForecastTable({ locations }: { locations: LocationForecast[] }) {
   return (
     <Card>
-      <CardHeader><CardTitle>Day-wise forecast by location</CardTitle></CardHeader>
+      <CardHeader><CardTitle>Forecast value by location</CardTitle></CardHeader>
       <CardContent className="overflow-x-auto">
         <Table>
           <TableHeader>
@@ -1082,10 +1335,8 @@ function LocationForecastTable({ locations, days }: { locations: LocationForecas
               <TableHead>City</TableHead>
               <TableHead>State</TableHead>
               <TableHead className="text-right">Buyers</TableHead>
-              <TableHead className="text-right">Total ({days}d)</TableHead>
-              {allDates.map((d) => (
-                <TableHead key={d} className="text-right min-w-[70px]">{fmtDate(d)}</TableHead>
-              ))}
+              <TableHead className="text-right">Total Qty</TableHead>
+              <TableHead className="text-right">Total Value</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -1097,29 +1348,517 @@ function LocationForecastTable({ locations, days }: { locations: LocationForecas
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">{l.state || "—"}</TableCell>
                 <TableCell className="text-right tabular-nums">{l.buyer_count}</TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">{l.total_p50.toFixed(0)}</TableCell>
-                {allDates.map((date) => {
-                  const day = l.daily.find((d) => d.date === date);
-                  return (
-                    <TableCell key={date} className="text-right tabular-nums text-sm">
-                      {day ? day.p50.toFixed(0) : "—"}
-                    </TableCell>
-                  );
-                })}
+                <TableCell className="text-right tabular-nums">{l.total_p50.toFixed(0)}</TableCell>
+                <TableCell className="text-right tabular-nums font-semibold">{fmtINR(l.total_value)}</TableCell>
               </TableRow>
             ))}
             <TableRow className="font-bold bg-muted/40">
               <TableCell colSpan={3}>Total</TableCell>
               <TableCell className="text-right tabular-nums">{locations.reduce((s, l) => s + l.total_p50, 0).toFixed(0)}</TableCell>
-              {allDates.map((date) => (
-                <TableCell key={date} className="text-right tabular-nums">
-                  {locations.reduce((s, l) => {
-                    const d = l.daily.find((x) => x.date === date);
-                    return s + (d?.p50 ?? 0);
-                  }, 0).toFixed(0)}
-                </TableCell>
-              ))}
+              <TableCell className="text-right tabular-nums">{fmtINR(locations.reduce((s, l) => s + l.total_value, 0))}</TableCell>
             </TableRow>
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Inbound Forecast Panel ────────────────────────────────────────────────────
+
+const SELLER_COLORS = [
+  "#16a34a", "#0891b2", "#7c3aed", "#d97706", "#dc2626",
+  "#4f46e5", "#db2777", "#65a30d", "#ea580c", "#2563eb",
+];
+
+function InboundForecastPanel({
+  data, loading, startDate, endDate, onStartChange, onEndChange,
+}: {
+  data: InboundForecastData | null;
+  loading: boolean;
+  startDate: string;
+  endDate: string;
+  onStartChange: (d: string) => void;
+  onEndChange: (d: string) => void;
+}) {
+  const [view, setView] = useState<"chart" | "table">("chart");
+  const [section, setSection] = useState<"daily" | "seller" | "location" | "product">("product");
+  const today = todayISO();
+
+  if (loading) return <Skeleton className="h-96 w-full" />;
+
+  const isEmpty = !data || data.note === "no_history" ||
+    (!data.daily_total.length && !data.by_seller.length && !data.by_product_seller.length);
+
+  const noHistoryMsg = data?.note === "no_history"
+    ? "No delivery history found for this warehouse. Inbound forecast requires at least one recorded inbound delivery."
+    : "No inbound forecast data available — record some inbound deliveries first.";
+
+  return (
+    <div className="space-y-4">
+      {/* Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <DateRangeControls
+            startDate={startDate} endDate={endDate} today={today}
+            onStartChange={onStartChange} onEndChange={onEndChange}
+          />
+          <span className="text-xs text-muted-foreground pl-1">
+            Based on historical delivery patterns (last 90 days)
+          </span>
+        </div>
+        {!isEmpty && (
+          <>
+            <div className="flex gap-2 flex-wrap">
+              <Button size="sm" variant={section === "product" ? "default" : "outline"} onClick={() => setSection("product")}>
+                <Package className="h-4 w-4 mr-1" /> By Product
+              </Button>
+              <Button size="sm" variant={section === "daily" ? "default" : "outline"} onClick={() => setSection("daily")}>
+                <TrendingUp className="h-4 w-4 mr-1" /> Daily Total
+              </Button>
+              <Button size="sm" variant={section === "seller" ? "default" : "outline"} onClick={() => setSection("seller")}>
+                <Store className="h-4 w-4 mr-1" /> By Seller
+              </Button>
+              <Button size="sm" variant={section === "location" ? "default" : "outline"} onClick={() => setSection("location")}>
+                <MapPin className="h-4 w-4 mr-1" /> By Location
+              </Button>
+            </div>
+            <div className="flex gap-1 border rounded-md overflow-hidden">
+              <Button size="sm" variant={view === "chart" ? "default" : "ghost"} className="rounded-none" onClick={() => setView("chart")}>
+                <BarChart2 className="h-4 w-4 mr-1" /> Chart
+              </Button>
+              <Button size="sm" variant={view === "table" ? "default" : "ghost"} className="rounded-none" onClick={() => setView("table")}>
+                <List className="h-4 w-4 mr-1" /> Table
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {isEmpty ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">{noHistoryMsg}</CardContent>
+        </Card>
+      ) : (
+        <>
+          {section === "product" && (
+            data.by_product_seller.length === 0
+              ? <Card><CardContent className="py-12 text-center text-muted-foreground">No per-seller product data found.</CardContent></Card>
+              : view === "chart"
+                ? <ProductSellerForecastChart products={data.by_product_seller} />
+                : <ProductSellerForecastTable products={data.by_product_seller} />
+          )}
+
+          {section === "daily" && (
+            view === "chart"
+              ? <InboundDailyTotalChart data={data.daily_total} />
+              : <InboundDailyTotalTable data={data.daily_total} />
+          )}
+
+          {section === "seller" && (
+            view === "chart"
+              ? <SellerForecastChart sellers={data.by_seller} />
+              : <SellerForecastTable sellers={data.by_seller} />
+          )}
+
+          {section === "location" && (
+            view === "chart"
+              ? <InboundLocationForecastChart locations={data.by_location} />
+              : <InboundLocationForecastTable locations={data.by_location} />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Inbound Daily Total ───────────────────────────────────────────────────────
+
+function InboundDailyTotalChart({ data }: { data: InboundDayTotal[] }) {
+  const chartData = data.map((d) => ({ ...d, date: fmtDate(d.date) }));
+  const totalP50   = data.reduce((s, d) => s + d.p50,       0);
+  const totalValue = data.reduce((s, d) => s + d.value_p50, 0);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Card><CardContent className="pt-5">
+          <div className="text-xs text-muted-foreground uppercase">Expected total</div>
+          <div className="text-2xl font-bold tabular-nums">{totalP50.toFixed(0)}</div>
+          <div className="text-xs text-muted-foreground">units (P50)</div>
+        </CardContent></Card>
+        <Card><CardContent className="pt-5">
+          <div className="text-xs text-muted-foreground uppercase">Low estimate</div>
+          <div className="text-2xl font-bold tabular-nums">{data.reduce((s, d) => s + d.p10, 0).toFixed(0)}</div>
+          <div className="text-xs text-muted-foreground">units (P10)</div>
+        </CardContent></Card>
+        <Card><CardContent className="pt-5">
+          <div className="text-xs text-muted-foreground uppercase">High estimate</div>
+          <div className="text-2xl font-bold tabular-nums">{data.reduce((s, d) => s + d.p90, 0).toFixed(0)}</div>
+          <div className="text-xs text-muted-foreground">units (P90)</div>
+        </CardContent></Card>
+        <Card><CardContent className="pt-5">
+          <div className="text-xs text-muted-foreground uppercase">Est. purchase value</div>
+          <div className="text-2xl font-bold tabular-nums text-green-700">{fmtINR(totalValue)}</div>
+          <div className="text-xs text-muted-foreground">at P50 (avg cost)</div>
+        </CardContent></Card>
+      </div>
+      <Card>
+        <CardHeader><CardTitle>Day-wise inbound forecast (P10 / P50 / P90)</CardTitle></CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={320}>
+            <AreaChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="inp90fill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor="#16a34a" stopOpacity={0.15} />
+                  <stop offset="95%" stopColor="#16a34a" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <RTooltip formatter={(v: number) => v.toFixed(0)} />
+              <Legend />
+              <Area type="monotone" dataKey="p90" stroke="#86efac" fill="url(#inp90fill)" name="P90 (high)" strokeWidth={1} dot={false} />
+              <Area type="monotone" dataKey="p50" stroke="#16a34a" fill="none" name="P50 (expected)" strokeWidth={2} dot={false} />
+              <Area type="monotone" dataKey="p10" stroke="#bbf7d0" fill="none" name="P10 (low)" strokeWidth={1} dot={false} strokeDasharray="4 3" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function InboundDailyTotalTable({ data }: { data: InboundDayTotal[] }) {
+  return (
+    <Card>
+      <CardHeader><CardTitle>Day-wise inbound forecast</CardTitle></CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Date</TableHead>
+              <TableHead className="text-right">P10 (low)</TableHead>
+              <TableHead className="text-right">P50 (expected)</TableHead>
+              <TableHead className="text-right">P90 (high)</TableHead>
+              <TableHead className="text-right">Est. cost P50</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.map((d) => (
+              <TableRow key={d.date}>
+                <TableCell className="font-medium">{fmtDate(d.date)}</TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">{d.p10.toFixed(0)}</TableCell>
+                <TableCell className="text-right tabular-nums font-semibold">{d.p50.toFixed(0)}</TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">{d.p90.toFixed(0)}</TableCell>
+                <TableCell className="text-right tabular-nums text-green-700">{fmtINR(d.value_p50)}</TableCell>
+              </TableRow>
+            ))}
+            <TableRow className="font-bold bg-muted/40">
+              <TableCell>Total</TableCell>
+              <TableCell className="text-right tabular-nums">{data.reduce((s, d) => s + d.p10, 0).toFixed(0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{data.reduce((s, d) => s + d.p50, 0).toFixed(0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{data.reduce((s, d) => s + d.p90, 0).toFixed(0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{fmtINR(data.reduce((s, d) => s + d.value_p50, 0))}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── By Seller ─────────────────────────────────────────────────────────────────
+
+function SellerForecastChart({ sellers }: { sellers: SellerForecast[] }) {
+  const summaryData = sellers.map((s, i) => ({
+    name: s.seller_name,
+    total_value: Math.round(s.total_value),
+    total_qty: Math.round(s.total_p50),
+    location: [s.city, s.state].filter(Boolean).join(", ") || "Unknown",
+    color: SELLER_COLORS[i % SELLER_COLORS.length],
+  }));
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle>Est. purchase value by seller (₹)</CardTitle></CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={Math.max(260, sellers.length * 44)}>
+            <BarChart data={summaryData} layout="vertical" margin={{ left: 140, right: 80 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                type="number"
+                tick={{ fontSize: 11 }}
+                tickFormatter={(v: number) => v >= 1000 ? `₹${(v / 1000).toFixed(0)}k` : `₹${v}`}
+              />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={140} />
+              <RTooltip
+                formatter={(v: number, _n, p) =>
+                  [`${fmtINR(v)} · ${p.payload.total_qty} units`, p.payload.location]
+                }
+              />
+              <Bar dataKey="total_value" radius={[0, 4, 4, 0]}>
+                {summaryData.map((entry, i) => (
+                  <Cell key={i} fill={entry.color} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function SellerForecastTable({ sellers }: { sellers: SellerForecast[] }) {
+  const nDays = sellers[0]?.daily.length || 1;
+  return (
+    <Card>
+      <CardHeader><CardTitle>Est. purchase value per seller</CardTitle></CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Seller</TableHead>
+              <TableHead>Location</TableHead>
+              <TableHead className="text-right">Avg daily P50</TableHead>
+              <TableHead className="text-right">Avg daily cost</TableHead>
+              <TableHead className="text-right">Period total qty</TableHead>
+              <TableHead className="text-right">Period total cost</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sellers.map((s, i) => (
+              <TableRow key={s.seller_id}>
+                <TableCell className="font-medium">
+                  <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: SELLER_COLORS[i % SELLER_COLORS.length] }} />
+                  {s.seller_name}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {[s.city, s.state].filter(Boolean).join(", ") || "—"}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">{(s.total_p50 / nDays).toFixed(1)}</TableCell>
+                <TableCell className="text-right tabular-nums">{fmtINR(s.total_value / nDays)}</TableCell>
+                <TableCell className="text-right tabular-nums">{s.total_p50.toFixed(0)}</TableCell>
+                <TableCell className="text-right tabular-nums font-semibold">{fmtINR(s.total_value)}</TableCell>
+              </TableRow>
+            ))}
+            <TableRow className="font-bold bg-muted/40">
+              <TableCell colSpan={4}>Total</TableCell>
+              <TableCell className="text-right tabular-nums">{sellers.reduce((s, b) => s + b.total_p50, 0).toFixed(0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{fmtINR(sellers.reduce((s, b) => s + b.total_value, 0))}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Inbound By Location ───────────────────────────────────────────────────────
+
+function InboundLocationForecastChart({ locations }: { locations: InboundLocationForecast[] }) {
+  const barData = locations.map((l) => ({
+    name: [l.city, l.state].filter(Boolean).join(", ") || "Unknown",
+    total_value: Math.round(l.total_value),
+    sellers: l.seller_count,
+  }));
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle>Est. purchase value by location (₹)</CardTitle></CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={barData} margin={{ top: 5, right: 20, left: 0, bottom: 40 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-35} textAnchor="end" interval={0} />
+              <YAxis
+                tick={{ fontSize: 11 }}
+                tickFormatter={(v: number) => v >= 1000 ? `₹${(v / 1000).toFixed(0)}k` : `₹${v}`}
+              />
+              <RTooltip formatter={(v: number, _n, p) => [`${fmtINR(v)} · ${p.payload.sellers} seller(s)`, "Est. purchase value"]} />
+              <Bar dataKey="total_value" radius={[4, 4, 0, 0]}>
+                {barData.map((_, i) => (
+                  <Cell key={i} fill={SELLER_COLORS[i % SELLER_COLORS.length]} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function InboundLocationForecastTable({ locations }: { locations: InboundLocationForecast[] }) {
+  return (
+    <Card>
+      <CardHeader><CardTitle>Est. purchase value by location</CardTitle></CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>City</TableHead>
+              <TableHead>State</TableHead>
+              <TableHead className="text-right">Sellers</TableHead>
+              <TableHead className="text-right">Total Qty</TableHead>
+              <TableHead className="text-right">Est. Cost</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {locations.map((l, i) => (
+              <TableRow key={`${l.city}-${l.state}`}>
+                <TableCell className="font-medium">
+                  <span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: SELLER_COLORS[i % SELLER_COLORS.length] }} />
+                  {l.city || "Unknown"}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">{l.state || "—"}</TableCell>
+                <TableCell className="text-right tabular-nums">{l.seller_count}</TableCell>
+                <TableCell className="text-right tabular-nums">{l.total_p50.toFixed(0)}</TableCell>
+                <TableCell className="text-right tabular-nums font-semibold">{fmtINR(l.total_value)}</TableCell>
+              </TableRow>
+            ))}
+            <TableRow className="font-bold bg-muted/40">
+              <TableCell colSpan={3}>Total</TableCell>
+              <TableCell className="text-right tabular-nums">{locations.reduce((s, l) => s + l.total_p50, 0).toFixed(0)}</TableCell>
+              <TableCell className="text-right tabular-nums">{fmtINR(locations.reduce((s, l) => s + l.total_value, 0))}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Product × Seller components ───────────────────────────────────────────────
+
+function ProductSellerForecastChart({ products }: { products: ProductSellerForecast[] }) {
+  const barData = products.map((p) => ({
+    name: p.sku_code ?? p.product_name,
+    full_name: p.product_name,
+    total_value: Math.round(p.total_value),
+    total_qty: Math.round(p.total_qty),
+    avg_unit_cost: p.avg_unit_cost,
+    uom: p.uom,
+  }));
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle>Est. purchase cost by product (₹)</CardTitle></CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={Math.max(260, products.length * 44)}>
+            <BarChart data={barData} layout="vertical" margin={{ left: 100, right: 80 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                type="number"
+                tick={{ fontSize: 11 }}
+                tickFormatter={(v: number) => v >= 1000 ? `₹${(v / 1000).toFixed(0)}k` : `₹${v}`}
+              />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={100} />
+              <RTooltip
+                formatter={(v: number, _n, p) =>
+                  [`${fmtINR(v)} · ${p.payload.total_qty} ${p.payload.uom} @ ₹${p.payload.avg_unit_cost.toFixed(2)}/unit`, p.payload.full_name]
+                }
+              />
+              <Bar dataKey="total_value" radius={[0, 4, 4, 0]}>
+                {barData.map((_, i) => (
+                  <Cell key={i} fill={SELLER_COLORS[i % SELLER_COLORS.length]} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ProductSellerForecastTable({ products }: { products: ProductSellerForecast[] }) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggle = (id: number) =>
+    setExpanded((prev) => {
+      const s = new Set(prev);
+      s.has(id) ? s.delete(id) : s.add(id);
+      return s;
+    });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Est. purchase cost by product × seller</CardTitle>
+        <p className="text-xs text-muted-foreground">Click a product row to expand seller breakdown.</p>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-6"></TableHead>
+              <TableHead>SKU</TableHead>
+              <TableHead>Product</TableHead>
+              <TableHead className="text-right">UOM</TableHead>
+              <TableHead className="text-right">Avg cost/unit</TableHead>
+              <TableHead className="text-right">Fcst Qty (P50)</TableHead>
+              <TableHead className="text-right">Est. Cost</TableHead>
+              <TableHead className="text-right">Sellers</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {products.map((p) => (
+              <>
+                <TableRow
+                  key={p.product_id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => toggle(p.product_id)}
+                >
+                  <TableCell className="text-muted-foreground">
+                    {expanded.has(p.product_id)
+                      ? <ChevronDown className="h-3.5 w-3.5" />
+                      : <ChevronRight className="h-3.5 w-3.5" />}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{p.sku_code ?? "—"}</TableCell>
+                  <TableCell className="font-medium">{p.product_name}</TableCell>
+                  <TableCell className="text-right tabular-nums text-xs text-muted-foreground">{p.uom}</TableCell>
+                  <TableCell className="text-right tabular-nums text-sm">₹{p.avg_unit_cost.toFixed(2)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{p.total_qty.toFixed(0)} <span className="text-xs text-muted-foreground">{p.uom}</span></TableCell>
+                  <TableCell className="text-right tabular-nums font-semibold text-green-700">{fmtINR(p.total_value)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{p.sellers.length}</TableCell>
+                </TableRow>
+                {expanded.has(p.product_id) && p.sellers.map((s) => (
+                  <TableRow key={`${p.product_id}-${s.seller_id}`} className="bg-muted/20">
+                    <TableCell />
+                    <TableCell />
+                    <TableCell className="pl-8 text-sm">
+                      <span className="font-medium">{s.seller_name}</span>
+                      {(s.city || s.state) && (
+                        <span className="ml-1.5 text-xs text-muted-foreground">
+                          {[s.city, s.state].filter(Boolean).join(", ")}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell />
+                    <TableCell />
+                    <TableCell className="text-right tabular-nums text-sm">{s.total_qty.toFixed(0)} <span className="text-xs text-muted-foreground">{p.uom}</span></TableCell>
+                    <TableCell className="text-right tabular-nums text-sm text-green-700">{fmtINR(s.total_value)}</TableCell>
+                    <TableCell />
+                  </TableRow>
+                ))}
+              </>
+            ))}
+            {products.length > 0 && (
+              <TableRow className="font-bold bg-muted/40">
+                <TableCell colSpan={5}>Total</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {products.reduce((s, p) => s + p.total_qty, 0).toFixed(0)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {fmtINR(products.reduce((s, p) => s + p.total_value, 0))}
+                </TableCell>
+                <TableCell />
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </CardContent>

@@ -593,7 +593,7 @@ def get_portfolio_product_list(
         params["wh"] = warehouse_id
     sql = f"""
         SELECT
-            p.id, p.name, p.sku_code,
+            p.id, p.name, p.sku_code, p.price, p.uom,
             p.stock_at_warehouse, p.lead_time_days, p.reorder_point, p.safety_stock,
             mm.status AS model_status, mm.trained_at, mm.cv_mae, mm.cv_mape,
             mm.data_end_date

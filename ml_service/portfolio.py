@@ -391,96 +391,111 @@ def get_outbound_forecast(
     business_id: int,
     customer_id: int,
     warehouse_id: int,
-    days_ahead: int = 30,
+    start_date: date,
+    end_date: date,
 ) -> dict:
-    """Return structured outbound forecast for the next days_ahead days.
+    """Return structured outbound forecast for the given date range.
 
     Uses the pre-computed ml_forecast_cache (populated by cache/refresh).
+    Valuation = price × p50_qty, computed at read time from the products table.
 
     Returns:
-      daily_total  – day-wise P10 / P50 / P90 summed across all products
-      by_buyer     – per-buyer day-wise P50 + totals, ordered by total desc
-      by_location  – per-city/state day-wise P50 aggregated from buyer data
+      daily_total      – day-wise P10/P50/P90 (qty) + value_p50 (₹) summed across products
+      by_buyer         – per-buyer day-wise P50 qty + value, ordered by total_value desc
+      by_location      – per-city/state day-wise P50 qty + value aggregated from buyers
+      by_product_buyer – per-product per-buyer breakdown with qty + value (the main view)
     """
-    today = date.today()
-    start = today + timedelta(days=1)
-    end   = today + timedelta(days=days_ahead)
+    empty = {
+        "start_date": start_date.isoformat(),
+        "end_date":   end_date.isoformat(),
+        "daily_total":      [],
+        "by_buyer":         [],
+        "by_location":      [],
+        "by_product_buyer": [],
+    }
 
-    # All cache rows for the window (aggregate + per-buyer)
     all_fc = get_forecast_cache(
         business_id, customer_id, warehouse_id,
-        start_date=start, end_date=end,
+        start_date=start_date, end_date=end_date,
     )
-
-    empty = {
-        "days_ahead": days_ahead,
-        "daily_total": [],
-        "by_buyer": [],
-        "by_location": [],
-    }
     if all_fc.empty:
         return empty
 
     all_fc["forecast_date"] = pd.to_datetime(all_fc["forecast_date"]).dt.date
 
-    # ── 1. Daily totals: aggregate rows (buyer_id IS NULL) summed per date ──
-    agg_fc = all_fc[all_fc["buyer_id"].isna()]
+    # Product lookup (includes price now)
+    products = get_portfolio_product_list(business_id, customer_id, warehouse_id)
+    price_by_product = {int(p["id"]): float(p.get("price") or 0) for p in products}
+    name_by_product  = {int(p["id"]): p["name"] for p in products}
+    sku_by_product   = {int(p["id"]): p.get("sku_code") for p in products}
+    uom_by_product   = {int(p["id"]): p.get("uom") or "pcs" for p in products}
+
+    buyers_info = get_all_buyers(business_id, customer_id)
+    buyer_map = {b["id"]: b for b in buyers_info}
+
+    # ── 1. Daily totals: aggregate rows (buyer_id IS NULL) ────────────────────
+    agg_fc = all_fc[all_fc["buyer_id"].isna()].copy()
     if agg_fc.empty:
         daily_total = []
     else:
+        agg_fc["value_p50"] = agg_fc["p50"] * agg_fc["product_id"].map(price_by_product).fillna(0)
         dt = (
-            agg_fc.groupby("forecast_date")[["p10", "p50", "p90"]]
+            agg_fc.groupby("forecast_date")[["p10", "p50", "p90", "value_p50"]]
             .sum()
             .reset_index()
             .sort_values("forecast_date")
         )
         daily_total = [
             {
-                "date": str(r["forecast_date"]),
-                "p10":  round(float(r["p10"]),  1),
-                "p50":  round(float(r["p50"]),  1),
-                "p90":  round(float(r["p90"]),  1),
+                "date":      str(r["forecast_date"]),
+                "p10":       round(float(r["p10"]),       1),
+                "p50":       round(float(r["p50"]),       1),
+                "p90":       round(float(r["p90"]),       1),
+                "value_p50": round(float(r["value_p50"]), 2),
             }
             for _, r in dt.iterrows()
         ]
 
-    # ── 2. Per-buyer: sum products per (buyer_id, date) ──
+    # ── 2. Per-buyer rows ──────────────────────────────────────────────────────
     buyer_fc = all_fc[all_fc["buyer_id"].notna()].copy()
-    buyer_fc["buyer_id"] = buyer_fc["buyer_id"].astype(int)
-
-    buyers_info = get_all_buyers(business_id, customer_id)
-    buyer_map = {b["id"]: b for b in buyers_info}
+    buyer_fc["buyer_id"]   = buyer_fc["buyer_id"].astype(int)
+    buyer_fc["price"]      = buyer_fc["product_id"].map(price_by_product).fillna(0)
+    buyer_fc["value_p50"]  = buyer_fc["p50"] * buyer_fc["price"]
 
     by_buyer: dict[int, dict] = {}
     if not buyer_fc.empty:
         bd = (
-            buyer_fc.groupby(["buyer_id", "forecast_date"])["p50"]
+            buyer_fc.groupby(["buyer_id", "forecast_date"])[["p50", "value_p50"]]
             .sum()
             .reset_index()
         )
         for _, r in bd.iterrows():
-            bid  = int(r["buyer_id"])
+            bid   = int(r["buyer_id"])
             binfo = buyer_map.get(bid, {})
-            p50  = round(float(r["p50"]), 1)
+            p50   = round(float(r["p50"]), 1)
+            val   = round(float(r["value_p50"]), 2)
             if bid not in by_buyer:
                 by_buyer[bid] = {
-                    "buyer_id":   bid,
-                    "buyer_name": binfo.get("name") or f"Buyer {bid}",
-                    "city":       binfo.get("city")  or "",
-                    "state":      binfo.get("state") or "",
-                    "total_p50":  0.0,
-                    "daily":      [],
+                    "buyer_id":    bid,
+                    "buyer_name":  binfo.get("name")  or f"Buyer {bid}",
+                    "city":        binfo.get("city")   or "",
+                    "state":       binfo.get("state")  or "",
+                    "total_p50":   0.0,
+                    "total_value": 0.0,
+                    "daily":       [],
                 }
-            by_buyer[bid]["total_p50"] += p50
-            by_buyer[bid]["daily"].append({"date": str(r["forecast_date"]), "p50": p50})
+            by_buyer[bid]["total_p50"]   += p50
+            by_buyer[bid]["total_value"] += val
+            by_buyer[bid]["daily"].append({"date": str(r["forecast_date"]), "p50": p50, "value": val})
 
     for b in by_buyer.values():
-        b["total_p50"] = round(b["total_p50"], 1)
+        b["total_p50"]   = round(b["total_p50"],   1)
+        b["total_value"] = round(b["total_value"],  2)
         b["daily"].sort(key=lambda x: x["date"])
 
-    by_buyer_list = sorted(by_buyer.values(), key=lambda x: -x["total_p50"])
+    by_buyer_list = sorted(by_buyer.values(), key=lambda x: -x["total_value"])
 
-    # ── 3. By location: aggregate buyer daily totals by city / state ──
+    # ── 3. By location ────────────────────────────────────────────────────────
     loc_map: dict[str, dict] = {}
     for b in by_buyer_list:
         city  = b["city"]  or "Unknown"
@@ -492,31 +507,328 @@ def get_outbound_forecast(
                 "state":       state,
                 "buyer_ids":   set(),
                 "total_p50":   0.0,
+                "total_value": 0.0,
                 "daily":       {},
             }
         loc = loc_map[key]
         loc["buyer_ids"].add(b["buyer_id"])
-        loc["total_p50"] += b["total_p50"]
+        loc["total_p50"]   += b["total_p50"]
+        loc["total_value"] += b["total_value"]
         for day in b["daily"]:
-            loc["daily"][day["date"]] = loc["daily"].get(day["date"], 0.0) + day["p50"]
+            slot = loc["daily"].setdefault(day["date"], {"p50": 0.0, "value": 0.0})
+            slot["p50"]   += day["p50"]
+            slot["value"] += day["value"]
 
     by_location = [
         {
             "city":        v["city"],
             "state":       v["state"],
             "buyer_count": len(v["buyer_ids"]),
-            "total_p50":   round(v["total_p50"], 1),
+            "total_p50":   round(v["total_p50"],   1),
+            "total_value": round(v["total_value"],  2),
             "daily": [
-                {"date": d, "p50": round(p, 1)}
-                for d, p in sorted(v["daily"].items())
+                {"date": d, "p50": round(s["p50"], 1), "value": round(s["value"], 2)}
+                for d, s in sorted(v["daily"].items())
             ],
         }
-        for v in sorted(loc_map.values(), key=lambda x: -x["total_p50"])
+        for v in sorted(loc_map.values(), key=lambda x: -x["total_value"])
     ]
 
+    # ── 4. By product × buyer ─────────────────────────────────────────────────
+    by_product: dict[int, dict] = {}
+    if not buyer_fc.empty:
+        for pid, prod_grp in buyer_fc.groupby("product_id"):
+            pid   = int(pid)
+            price = price_by_product.get(pid, 0.0)
+            buyers_in_prod: dict[int, dict] = {}
+            for _, row in prod_grp.iterrows():
+                bid   = int(row["buyer_id"])
+                binfo = buyer_map.get(bid, {})
+                qty   = float(row["p50"])
+                val   = qty * price
+                if bid not in buyers_in_prod:
+                    buyers_in_prod[bid] = {
+                        "buyer_id":    bid,
+                        "buyer_name":  binfo.get("name")  or f"Buyer {bid}",
+                        "city":        binfo.get("city")   or "",
+                        "state":       binfo.get("state")  or "",
+                        "total_qty":   0.0,
+                        "total_value": 0.0,
+                        "daily":       [],
+                    }
+                buyers_in_prod[bid]["total_qty"]   += qty
+                buyers_in_prod[bid]["total_value"] += val
+                buyers_in_prod[bid]["daily"].append({
+                    "date":  str(row["forecast_date"]),
+                    "qty":   round(qty, 1),
+                    "value": round(val, 2),
+                })
+            for b in buyers_in_prod.values():
+                b["total_qty"]   = round(b["total_qty"],   1)
+                b["total_value"] = round(b["total_value"],  2)
+                b["daily"].sort(key=lambda x: x["date"])
+
+            by_product[pid] = {
+                "product_id":   pid,
+                "product_name": name_by_product.get(pid, f"Product {pid}"),
+                "sku_code":     sku_by_product.get(pid),
+                "uom":          uom_by_product.get(pid, "pcs"),
+                "price":        price,
+                "total_qty":    round(float(prod_grp["p50"].sum()),       1),
+                "total_value":  round(float(prod_grp["value_p50"].sum()), 2),
+                "buyers":       sorted(buyers_in_prod.values(), key=lambda x: -x["total_value"]),
+            }
+
+    by_product_buyer = sorted(by_product.values(), key=lambda x: -x["total_value"])
+
     return {
-        "days_ahead":  days_ahead,
-        "daily_total": daily_total,
-        "by_buyer":    by_buyer_list,
-        "by_location": by_location,
+        "start_date":       start_date.isoformat(),
+        "end_date":         end_date.isoformat(),
+        "daily_total":      daily_total,
+        "by_buyer":         by_buyer_list,
+        "by_location":      by_location,
+        "by_product_buyer": by_product_buyer,
+    }
+
+
+def get_inbound_forecast(
+    business_id: int,
+    customer_id: int,
+    warehouse_id: int,
+    start_date: date,
+    end_date: date,
+) -> dict:
+    """Statistical inbound forecast from historical delivery patterns.
+
+    P10/P50/P90 are percentiles of historical daily inbound qty per
+    (product, seller) over the 90 days before start_date. Valuation uses
+    the historical average unit cost. Daily projections are flat (same
+    value each day) — no seasonality, by design for V1.
+    """
+    from collections import defaultdict
+
+    lookback_end   = start_date - timedelta(days=1)
+    lookback_start = lookback_end - timedelta(days=89)
+
+    df = get_seller_product_series(
+        business_id, customer_id,
+        warehouse_id=warehouse_id,
+        start_date=lookback_start,
+        end_date=lookback_end,
+    )
+
+    products    = get_portfolio_product_list(business_id, customer_id, warehouse_id)
+    name_by_pid = {int(p["id"]): p["name"] for p in products}
+    sku_by_pid  = {int(p["id"]): p.get("sku_code") for p in products}
+    uom_by_pid  = {int(p["id"]): p.get("uom") or "pcs" for p in products}
+
+    sellers    = get_all_sellers(business_id, customer_id)
+    seller_map = {int(s["id"]): s for s in sellers}
+
+    _empty = {
+        "start_date": start_date.isoformat(),
+        "end_date":   end_date.isoformat(),
+        "note": "no_history",
+        "daily_total": [], "by_seller": [], "by_location": [], "by_product_seller": [],
+    }
+    if df.empty:
+        return _empty
+
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+
+    all_hist_dates = pd.date_range(str(lookback_start), str(lookback_end), freq="D")
+    forecast_dates = pd.date_range(str(start_date), str(end_date), freq="D")
+
+    # Per-(product, seller): compute P10/P50/P90 from 90-day daily distribution
+    stats_rows = []
+    for (pid, sid), grp in df.groupby(["product_id", "seller_id"]):
+        pid, sid = int(pid), int(sid)
+        daily_qty = (
+            grp.groupby("date")["inbound_qty"].sum()
+            .reindex(all_hist_dates, fill_value=0)
+        )
+        avg_cost = float(grp["avg_unit_cost"].mean()) if "avg_unit_cost" in grp.columns else 0.0
+        stats_rows.append({
+            "product_id":    pid,
+            "seller_id":     sid,
+            "p10":           float(daily_qty.quantile(0.10)),
+            "p50":           float(daily_qty.quantile(0.50)),
+            "p90":           float(daily_qty.quantile(0.90)),
+            "avg_unit_cost": avg_cost,
+        })
+
+    if not stats_rows:
+        return _empty
+
+    stats_df = pd.DataFrame(stats_rows)
+
+    # Expand: same P10/P50/P90 for every forecast day
+    fc_rows = [
+        {
+            "product_id":    int(s["product_id"]),
+            "seller_id":     int(s["seller_id"]),
+            "forecast_date": d.date(),
+            "p10":           s["p10"],
+            "p50":           s["p50"],
+            "p90":           s["p90"],
+            "avg_unit_cost": s["avg_unit_cost"],
+        }
+        for _, s in stats_df.iterrows()
+        for d in forecast_dates
+    ]
+    fc_df = pd.DataFrame(fc_rows)
+    fc_df["value_p50"] = fc_df["p50"] * fc_df["avg_unit_cost"]
+
+    # ── daily_total ───────────────────────────────────────────────────────────
+    agg_daily = (
+        fc_df.groupby("forecast_date")[["p10", "p50", "p90", "value_p50"]]
+        .sum().reset_index().sort_values("forecast_date")
+    )
+    daily_total = [
+        {
+            "date":      str(r["forecast_date"]),
+            "p10":       round(float(r["p10"]),       1),
+            "p50":       round(float(r["p50"]),       1),
+            "p90":       round(float(r["p90"]),       1),
+            "value_p50": round(float(r["value_p50"]), 2),
+        }
+        for _, r in agg_daily.iterrows()
+    ]
+
+    # ── by_seller ─────────────────────────────────────────────────────────────
+    by_seller: dict[int, dict] = {}
+    seller_daily_agg: dict[tuple, dict] = {}
+
+    for _, row in fc_df.iterrows():
+        sid   = int(row["seller_id"])
+        d     = str(row["forecast_date"])
+        qty   = float(row["p50"])
+        val   = float(row["value_p50"])
+        sinfo = seller_map.get(sid, {})
+
+        if sid not in by_seller:
+            by_seller[sid] = {
+                "seller_id":   sid,
+                "seller_name": sinfo.get("name")  or f"Seller {sid}",
+                "city":        sinfo.get("city")   or "",
+                "state":       sinfo.get("state")  or "",
+                "total_p50":   0.0,
+                "total_value": 0.0,
+            }
+        by_seller[sid]["total_p50"]   += qty
+        by_seller[sid]["total_value"] += val
+
+        k = (sid, d)
+        if k not in seller_daily_agg:
+            seller_daily_agg[k] = {"date": d, "p50": 0.0, "value": 0.0}
+        seller_daily_agg[k]["p50"]   += qty
+        seller_daily_agg[k]["value"] += val
+
+    # Group daily entries by seller for O(1) lookup
+    daily_by_sid: dict[int, list] = defaultdict(list)
+    for (sid, _), v in seller_daily_agg.items():
+        daily_by_sid[sid].append(v)
+
+    for sid, entry in by_seller.items():
+        entry["total_p50"]   = round(entry["total_p50"],   1)
+        entry["total_value"] = round(entry["total_value"],  2)
+        entry["daily"] = sorted(
+            [{"date": d["date"], "p50": round(d["p50"], 1), "value": round(d["value"], 2)}
+             for d in daily_by_sid[sid]],
+            key=lambda x: x["date"],
+        )
+
+    by_seller_list = sorted(by_seller.values(), key=lambda x: -x["total_value"])
+
+    # ── by_location ───────────────────────────────────────────────────────────
+    loc_map: dict[tuple, dict] = {}
+    for entry in by_seller_list:
+        key = (entry["city"], entry["state"])
+        if key not in loc_map:
+            loc_map[key] = {
+                "city":         entry["city"],
+                "state":        entry["state"],
+                "seller_count": 0,
+                "total_p50":    0.0,
+                "total_value":  0.0,
+                "daily":        {},
+            }
+        loc_map[key]["seller_count"] += 1
+        loc_map[key]["total_p50"]    += entry["total_p50"]
+        loc_map[key]["total_value"]  += entry["total_value"]
+        for d in entry["daily"]:
+            ld = loc_map[key]["daily"].setdefault(d["date"], {"date": d["date"], "p50": 0.0, "value": 0.0})
+            ld["p50"]   += d["p50"]
+            ld["value"] += d["value"]
+
+    by_location = []
+    for entry in sorted(loc_map.values(), key=lambda x: -x["total_value"]):
+        entry["total_p50"]   = round(entry["total_p50"],  1)
+        entry["total_value"] = round(entry["total_value"], 2)
+        entry["daily"] = sorted(entry.pop("daily").values(), key=lambda x: x["date"])
+        by_location.append(entry)
+
+    # ── by_product_seller ─────────────────────────────────────────────────────
+    by_product: dict[int, dict] = {}
+    for _, row in fc_df.iterrows():
+        pid   = int(row["product_id"])
+        sid   = int(row["seller_id"])
+        d     = str(row["forecast_date"])
+        qty   = float(row["p50"])
+        val   = float(row["value_p50"])
+        sinfo = seller_map.get(sid, {})
+
+        if pid not in by_product:
+            prod_stats = stats_df[stats_df["product_id"] == pid]
+            avg_cost   = float(prod_stats["avg_unit_cost"].mean()) if not prod_stats.empty else 0.0
+            by_product[pid] = {
+                "product_id":    pid,
+                "product_name":  name_by_pid.get(pid, f"Product {pid}"),
+                "sku_code":      sku_by_pid.get(pid),
+                "uom":           uom_by_pid.get(pid, "pcs"),
+                "avg_unit_cost": avg_cost,
+                "total_qty":     0.0,
+                "total_value":   0.0,
+                "sellers":       {},
+            }
+        by_product[pid]["total_qty"]   += qty
+        by_product[pid]["total_value"] += val
+
+        sellers_in_prod = by_product[pid]["sellers"]
+        if sid not in sellers_in_prod:
+            sellers_in_prod[sid] = {
+                "seller_id":   sid,
+                "seller_name": sinfo.get("name")  or f"Seller {sid}",
+                "city":        sinfo.get("city")   or "",
+                "state":       sinfo.get("state")  or "",
+                "total_qty":   0.0,
+                "total_value": 0.0,
+                "daily":       [],
+            }
+        sellers_in_prod[sid]["total_qty"]   += qty
+        sellers_in_prod[sid]["total_value"] += val
+        sellers_in_prod[sid]["daily"].append({"date": d, "qty": round(qty, 1), "value": round(val, 2)})
+
+    by_product_seller = []
+    for pid, entry in by_product.items():
+        entry["total_qty"]   = round(entry["total_qty"],   1)
+        entry["total_value"] = round(entry["total_value"],  2)
+        sellers_list = sorted(entry.pop("sellers").values(), key=lambda x: -x["total_value"])
+        for s in sellers_list:
+            s["total_qty"]   = round(s["total_qty"],   1)
+            s["total_value"] = round(s["total_value"],  2)
+            s["daily"].sort(key=lambda x: x["date"])
+        entry["sellers"] = sellers_list
+        by_product_seller.append(entry)
+    by_product_seller.sort(key=lambda x: -x["total_value"])
+
+    return {
+        "start_date":        start_date.isoformat(),
+        "end_date":          end_date.isoformat(),
+        "note":              "historical_projection",
+        "daily_total":       daily_total,
+        "by_seller":         by_seller_list,
+        "by_location":       by_location,
+        "by_product_seller": by_product_seller,
     }

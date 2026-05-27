@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -27,6 +28,7 @@ from portfolio import (
     get_buyer_detail,
     get_location_heatmap,
     get_outbound_forecast,
+    get_inbound_forecast,
 )
 from insights import compute_portfolio_insights
 from seller_analytics import compute_seller_metrics
@@ -244,16 +246,38 @@ def seller_metrics(
 
 @router.get("/outbound-forecast")
 def outbound_forecast(
-    business_id: int = Query(...),
-    customer_id: int = Query(...),
-    warehouse_id: int = Query(...),
-    days_ahead: int = Query(30, ge=7, le=30),
+    business_id:  int  = Query(...),
+    customer_id:  int  = Query(...),
+    warehouse_id: int  = Query(...),
+    start_date:   date = Query(...),
+    end_date:     date = Query(...),
 ):
-    """Day-wise, buyer-wise, and location-wise outbound forecast for the next N days."""
+    """Day-wise, buyer-wise, location-wise, and product×buyer outbound forecast with valuations."""
     try:
-        return get_outbound_forecast(business_id, customer_id, warehouse_id, days_ahead)
+        return get_outbound_forecast(
+            business_id, customer_id, warehouse_id,
+            start_date=start_date, end_date=end_date,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"outbound-forecast failed: {exc}")
+
+
+@router.get("/inbound-forecast")
+def inbound_forecast(
+    business_id:  int  = Query(...),
+    customer_id:  int  = Query(...),
+    warehouse_id: int  = Query(...),
+    start_date:   date = Query(...),
+    end_date:     date = Query(...),
+):
+    """Statistical inbound projection from historical delivery patterns."""
+    try:
+        return get_inbound_forecast(
+            business_id, customer_id, warehouse_id,
+            start_date=start_date, end_date=end_date,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"inbound-forecast failed: {exc}")
 
 
 @router.post("/cache/refresh")

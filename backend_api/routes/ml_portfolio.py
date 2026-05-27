@@ -8,6 +8,7 @@ their own customer's data.
 from __future__ import annotations
 
 import os
+from datetime import date, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -226,16 +227,57 @@ async def seller_metrics(
 
 @router.get("/outbound-forecast")
 async def outbound_forecast(
-    customer_id: int = Query(...),
-    warehouse_id: int = Query(...),
-    days_ahead: int = Query(30, ge=7, le=30),
+    customer_id:  int  = Query(...),
+    warehouse_id: int  = Query(...),
+    start_date:   date = Query(...),
+    end_date:     date = Query(...),
     ctx: UserContext = Depends(get_user_context),
 ):
-    """Day-wise, buyer-wise, and location-wise outbound forecast for the next N days."""
+    """Day-wise, buyer-wise, location-wise, and product×buyer outbound forecast with valuations."""
+    today = date.today()
+    if start_date < today:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="start_date must be >= today")
+    if end_date < start_date:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="end_date must be >= start_date")
+    if end_date > start_date + timedelta(days=60):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="end_date must be <= start_date + 60 days")
     biz, cust, wh = _resolve_scope(ctx, customer_id, warehouse_id)
     return await _ml_get(
         "/portfolio/outbound-forecast",
-        _params(biz, cust, wh, days_ahead=days_ahead),
+        _params(biz, cust, wh,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat()),
+    )
+
+
+@router.get("/inbound-forecast")
+async def inbound_forecast(
+    customer_id:  int  = Query(...),
+    warehouse_id: int  = Query(...),
+    start_date:   date = Query(...),
+    end_date:     date = Query(...),
+    ctx: UserContext = Depends(get_user_context),
+):
+    """Inbound forecast projection per seller."""
+    today = date.today()
+    if start_date < today:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="start_date must be >= today")
+    if end_date < start_date:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="end_date must be >= start_date")
+    if end_date > start_date + timedelta(days=60):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="end_date must be <= start_date + 60 days")
+    biz, cust, wh = _resolve_scope(ctx, customer_id, warehouse_id)
+    return await _ml_get(
+        "/portfolio/inbound-forecast",
+        _params(biz, cust, wh,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat()),
     )
 
 
