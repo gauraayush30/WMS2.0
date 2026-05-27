@@ -873,6 +873,185 @@ def get_insights(
         return []
 
 
+# ── Inbound ML model metadata ────────────────────────────────────────────────
+
+def save_inbound_model_metadata(
+    business_id: int, customer_id: int, warehouse_id: int,
+    model_path: str,
+    data_start: date, data_end: date,
+    total_points: int, n_products: int, n_sellers: int,
+    cv_mae: float, cv_mape: float, features_used: list[str],
+) -> dict:
+    upsert = text("""
+        INSERT INTO ml_inbound_model_metadata
+            (business_id, customer_id, warehouse_id, model_path, trained_at,
+             data_start_date, data_end_date, total_data_points,
+             n_products, n_sellers,
+             cv_mae, cv_mape, features_used, status)
+        VALUES
+            (:biz, :cust, :wh, :path, NOW(),
+             :ds, :de, :tp, :np, :ns,
+             :mae, :mape, :feats, 'ready')
+        ON CONFLICT (business_id, customer_id, warehouse_id)
+        DO UPDATE SET
+            model_path        = EXCLUDED.model_path,
+            trained_at        = NOW(),
+            data_start_date   = EXCLUDED.data_start_date,
+            data_end_date     = EXCLUDED.data_end_date,
+            total_data_points = EXCLUDED.total_data_points,
+            n_products        = EXCLUDED.n_products,
+            n_sellers         = EXCLUDED.n_sellers,
+            cv_mae            = EXCLUDED.cv_mae,
+            cv_mape           = EXCLUDED.cv_mape,
+            features_used     = EXCLUDED.features_used,
+            status            = 'ready'
+        RETURNING *
+    """)
+    with engine.begin() as conn:
+        row = conn.execute(upsert, {
+            "biz": business_id, "cust": customer_id, "wh": warehouse_id,
+            "path": model_path,
+            "ds": data_start, "de": data_end, "tp": total_points,
+            "np": n_products, "ns": n_sellers,
+            "mae": round(cv_mae, 2), "mape": round(cv_mape, 2),
+            "feats": features_used,
+        }).mappings().fetchone()
+    return dict(row) if row else {}
+
+
+def get_inbound_model_metadata(
+    business_id: int, customer_id: int, warehouse_id: int,
+) -> dict | None:
+    query = text("""
+        SELECT * FROM ml_inbound_model_metadata
+        WHERE business_id = :biz AND customer_id = :cust AND warehouse_id = :wh
+    """)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(query, {
+                "biz": business_id, "cust": customer_id, "wh": warehouse_id,
+            }).mappings().fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def update_inbound_model_status(
+    business_id: int, customer_id: int, warehouse_id: int, status: str,
+) -> None:
+    query = text("""
+        UPDATE ml_inbound_model_metadata SET status = :s
+        WHERE business_id = :biz AND customer_id = :cust AND warehouse_id = :wh
+    """)
+    try:
+        with engine.begin() as conn:
+            conn.execute(query, {
+                "biz": business_id, "cust": customer_id, "wh": warehouse_id, "s": status,
+            })
+    except Exception:
+        pass
+
+
+# ── Inbound forecast cache ───────────────────────────────────────────────────
+
+def save_inbound_forecast_cache(
+    business_id: int, customer_id: int, warehouse_id: int,
+    rows: list[dict],
+) -> int:
+    """Bulk-upsert inbound forecast rows.
+
+    Each row: {product_id, seller_id (or None), forecast_date, p10, p50, p90}.
+    Uses two queries to handle the seller_id-NULL partial unique index.
+    """
+    if not rows:
+        return 0
+    agg_rows = [r for r in rows if r.get("seller_id") is None]
+    seller_rows = [r for r in rows if r.get("seller_id") is not None]
+
+    inserted = 0
+    with engine.begin() as conn:
+        if agg_rows:
+            stmt = text("""
+                INSERT INTO ml_inbound_forecast_cache
+                    (business_id, customer_id, warehouse_id, product_id,
+                     seller_id, forecast_date, p10, p50, p90, computed_at)
+                VALUES
+                    (:biz, :cust, :wh, :pid, NULL, :d, :p10, :p50, :p90, NOW())
+                ON CONFLICT (business_id, customer_id, warehouse_id, product_id, forecast_date)
+                WHERE seller_id IS NULL
+                DO UPDATE SET p10 = EXCLUDED.p10, p50 = EXCLUDED.p50,
+                              p90 = EXCLUDED.p90, computed_at = NOW()
+            """)
+            params = [{
+                "biz": business_id, "cust": customer_id, "wh": warehouse_id,
+                "pid": r["product_id"], "d": r["forecast_date"],
+                "p10": float(r["p10"]), "p50": float(r["p50"]), "p90": float(r["p90"]),
+            } for r in agg_rows]
+            conn.execute(stmt, params)
+            inserted += len(agg_rows)
+        if seller_rows:
+            stmt = text("""
+                INSERT INTO ml_inbound_forecast_cache
+                    (business_id, customer_id, warehouse_id, product_id,
+                     seller_id, forecast_date, p10, p50, p90, computed_at)
+                VALUES
+                    (:biz, :cust, :wh, :pid, :sid, :d, :p10, :p50, :p90, NOW())
+                ON CONFLICT (business_id, customer_id, warehouse_id, product_id, seller_id, forecast_date)
+                WHERE seller_id IS NOT NULL
+                DO UPDATE SET p10 = EXCLUDED.p10, p50 = EXCLUDED.p50,
+                              p90 = EXCLUDED.p90, computed_at = NOW()
+            """)
+            params = [{
+                "biz": business_id, "cust": customer_id, "wh": warehouse_id,
+                "pid": r["product_id"], "sid": r["seller_id"], "d": r["forecast_date"],
+                "p10": float(r["p10"]), "p50": float(r["p50"]), "p90": float(r["p90"]),
+            } for r in seller_rows]
+            conn.execute(stmt, params)
+            inserted += len(seller_rows)
+    return inserted
+
+
+def get_inbound_forecast_cache(
+    business_id: int, customer_id: int, warehouse_id: int,
+    product_id: int | None = None,
+    seller_id: int | None = None,
+    aggregate_only: bool = False,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> pd.DataFrame:
+    where = ["business_id = :biz", "customer_id = :cust", "warehouse_id = :wh"]
+    params: dict = {"biz": business_id, "cust": customer_id, "wh": warehouse_id}
+    if product_id is not None:
+        where.append("product_id = :pid")
+        params["pid"] = product_id
+    if aggregate_only:
+        where.append("seller_id IS NULL")
+    elif seller_id is not None:
+        where.append("seller_id = :sid")
+        params["sid"] = seller_id
+    if start_date is not None:
+        where.append("forecast_date >= :start")
+        params["start"] = start_date
+    if end_date is not None:
+        where.append("forecast_date <= :end")
+        params["end"] = end_date
+    sql = f"""
+        SELECT product_id, seller_id, forecast_date, p10, p50, p90, computed_at
+        FROM ml_inbound_forecast_cache
+        WHERE {' AND '.join(where)}
+        ORDER BY forecast_date
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    if not rows:
+        return pd.DataFrame(columns=["product_id", "seller_id", "forecast_date", "p10", "p50", "p90", "computed_at"])
+    df = pd.DataFrame(rows)
+    df["forecast_date"] = pd.to_datetime(df["forecast_date"]).dt.normalize()
+    for c in ("p10", "p50", "p90"):
+        df[c] = df[c].astype(float)
+    return df
+
+
 def delete_uploaded_history(
     product_id: int, business_id: int, customer_id: int | None = None,
 ) -> int:

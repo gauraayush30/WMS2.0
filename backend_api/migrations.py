@@ -1065,6 +1065,78 @@ def create_seller_locations_table() -> None:
     print("[migrations] seller_locations table is ready.")
 
 
+# ── WMS 2.0 v9: Inbound ML model + forecast cache ───────────────────────────
+
+def create_ml_inbound_model_metadata_table() -> None:
+    """Tracks the global inbound per-(customer, warehouse) model.
+
+    Parallel to ml_global_model_metadata but for the inbound pipeline:
+    seller_id / inbound_qty instead of buyer_id / outbound_qty.
+    """
+    query = text("""
+        CREATE TABLE IF NOT EXISTS ml_inbound_model_metadata (
+            id                  SERIAL          PRIMARY KEY,
+            business_id         INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            customer_id         INTEGER         NOT NULL REFERENCES customers(id)  ON DELETE CASCADE,
+            warehouse_id        INTEGER         NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+            model_path          VARCHAR(500)    NOT NULL,
+            trained_at          TIMESTAMPTZ     NOT NULL,
+            data_start_date     DATE,
+            data_end_date       DATE,
+            total_data_points   INTEGER,
+            n_products          INTEGER,
+            n_sellers           INTEGER,
+            cv_mae              DECIMAL(10, 2),
+            cv_mape             DECIMAL(10, 2),
+            features_used       TEXT[]          DEFAULT '{}',
+            status              VARCHAR(20)     NOT NULL DEFAULT 'ready',
+            created_at          TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+            UNIQUE(business_id, customer_id, warehouse_id)
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+    print("[migrations] ml_inbound_model_metadata table is ready.")
+
+
+def create_ml_inbound_forecast_cache_table() -> None:
+    """Stores P10/P50/P90 inbound forecasts from the inbound model.
+
+    Parallel to ml_forecast_cache but keyed by seller_id instead of buyer_id.
+    """
+    query = text("""
+        CREATE TABLE IF NOT EXISTS ml_inbound_forecast_cache (
+            id              BIGSERIAL       PRIMARY KEY,
+            business_id     INTEGER         NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            customer_id     INTEGER         NOT NULL REFERENCES customers(id)  ON DELETE CASCADE,
+            warehouse_id    INTEGER         NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+            product_id      INTEGER         NOT NULL REFERENCES products(id)   ON DELETE CASCADE,
+            seller_id       INTEGER         REFERENCES suppliers(id) ON DELETE SET NULL,
+            forecast_date   DATE            NOT NULL,
+            p10             DECIMAL(14, 4)  NOT NULL DEFAULT 0,
+            p50             DECIMAL(14, 4)  NOT NULL DEFAULT 0,
+            p90             DECIMAL(14, 4)  NOT NULL DEFAULT 0,
+            computed_at     TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+        );
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_ml_inbound_fc_agg_unique
+            ON ml_inbound_forecast_cache (business_id, customer_id, warehouse_id, product_id, forecast_date)
+            WHERE seller_id IS NULL
+        """))
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ix_ml_inbound_fc_seller_unique
+            ON ml_inbound_forecast_cache (business_id, customer_id, warehouse_id, product_id, seller_id, forecast_date)
+            WHERE seller_id IS NOT NULL
+        """))
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS ix_ml_inbound_fc_lookup
+            ON ml_inbound_forecast_cache (business_id, customer_id, warehouse_id, forecast_date)
+        """))
+    print("[migrations] ml_inbound_forecast_cache table is ready.")
+
 
 def run_all() -> None:
     """Run all migrations in dependency order."""
@@ -1114,5 +1186,9 @@ def run_all() -> None:
     create_ml_forecast_cache_table()
     create_ml_insights_cache_table()
     create_portfolio_materialized_views()
+
+    # ── v9: inbound ML model + forecast cache ───────────────────────────────
+    create_ml_inbound_model_metadata_table()
+    create_ml_inbound_forecast_cache_table()
 
     print("[migrations] All migrations complete.")

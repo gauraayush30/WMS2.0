@@ -15,13 +15,17 @@ from fastapi import APIRouter, HTTPException, Query
 
 from db import (
     get_global_model_metadata,
+    get_inbound_model_metadata,
     get_insights,
     get_forecast_cache,
     save_forecast_cache,
+    save_inbound_forecast_cache,
     save_insights,
 )
 from global_trainer import train_global_model, delete_global_model
 from global_predictor import predict_global
+from inbound_trainer import train_inbound_model, delete_inbound_model
+from inbound_predictor import predict_inbound
 from portfolio import (
     get_portfolio_summary,
     get_seller_detail,
@@ -36,7 +40,8 @@ from seller_analytics import compute_seller_metrics
 router = APIRouter(prefix="/portfolio", tags=["ML Portfolio"])
 
 # ── In-memory training state (per customer-warehouse) ───────────────────────
-_g_state: dict[str, dict] = {}
+_g_state: dict[str, dict] = {}   # outbound global model
+_gi_state: dict[str, dict] = {}  # inbound global model
 _g_lock = threading.Lock()
 
 
@@ -319,5 +324,169 @@ def cache_refresh(
     return {
         "rows_cached": saved,
         "insights": len(insights_list),
+        "days_ahead": days_ahead,
+    }
+
+
+# ── Inbound model train / status / cache ────────────────────────────────────
+
+def _run_inbound_training_bg(biz: int, cust: int, wh: int, key: str) -> None:
+    started = time.time()
+    with _g_lock:
+        _gi_state[key] = {
+            "status": "training", "phase": "initializing",
+            "phase_detail": "", "started_at": started,
+            "result": None, "error": None,
+        }
+
+    def _p(phase, done=0, total=0, detail=""):
+        with _g_lock:
+            if key in _gi_state:
+                _gi_state[key].update({
+                    "phase": phase, "phase_detail": detail,
+                    "cv_done": done, "cv_total": total,
+                })
+
+    try:
+        result = train_inbound_model(biz, cust, wh, progress_callback=_p)
+        with _g_lock:
+            _gi_state[key] = {
+                "status": "ready", "phase": "done", "phase_detail": "",
+                "started_at": started,
+                "elapsed_seconds": round(time.time() - started, 1),
+                "result": result, "error": None,
+            }
+    except Exception as exc:
+        with _g_lock:
+            _gi_state[key] = {
+                "status": "failed", "phase": "failed",
+                "phase_detail": str(exc), "started_at": started,
+                "elapsed_seconds": round(time.time() - started, 1),
+                "result": None, "error": str(exc),
+            }
+
+
+@router.post("/inbound/train")
+def inbound_train(
+    business_id: int = Query(...),
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+):
+    """Start async training of the inbound model for this customer-warehouse."""
+    key = _key(business_id, customer_id, warehouse_id)
+    with _g_lock:
+        current = _gi_state.get(key, {})
+        if current.get("status") == "training":
+            return {
+                "status": "training",
+                "message": "Inbound model training already in progress",
+                "elapsed_seconds": round(time.time() - current["started_at"], 1),
+            }
+    t = threading.Thread(
+        target=_run_inbound_training_bg,
+        args=(business_id, customer_id, warehouse_id, key),
+        daemon=True,
+    )
+    t.start()
+    return {"status": "training", "message": "Inbound model training started"}
+
+
+@router.get("/inbound/train-progress")
+def inbound_train_progress(
+    business_id: int = Query(...),
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+):
+    key = _key(business_id, customer_id, warehouse_id)
+    with _g_lock:
+        state = dict(_gi_state.get(key, {}))
+    if not state:
+        meta = get_inbound_model_metadata(business_id, customer_id, warehouse_id)
+        return {
+            "status": meta.get("status", "idle") if meta else "idle",
+            "phase": "idle", "phase_detail": "",
+            "cv_done": 0, "cv_total": 0, "elapsed_seconds": 0.0,
+            "result": None, "error": None,
+        }
+    elapsed = (
+        round(time.time() - state["started_at"], 1)
+        if state.get("status") == "training"
+        else state.get("elapsed_seconds", 0.0)
+    )
+    return {
+        "status": state["status"],
+        "phase": state.get("phase", ""),
+        "phase_detail": state.get("phase_detail", ""),
+        "cv_done": state.get("cv_done", 0),
+        "cv_total": state.get("cv_total", 0),
+        "elapsed_seconds": elapsed,
+        "result": state.get("result"),
+        "error": state.get("error"),
+    }
+
+
+@router.get("/inbound/status")
+def inbound_model_status(
+    business_id: int = Query(...),
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+):
+    meta = get_inbound_model_metadata(business_id, customer_id, warehouse_id)
+    if not meta:
+        return {"has_model": False, "status": "no_model"}
+    return {
+        "has_model": True,
+        "status": meta.get("status", "ready"),
+        "trained_at": meta["trained_at"].isoformat() if meta.get("trained_at") else None,
+        "data_start": meta["data_start_date"].isoformat() if meta.get("data_start_date") else None,
+        "data_end": meta["data_end_date"].isoformat() if meta.get("data_end_date") else None,
+        "n_products": meta.get("n_products"),
+        "n_sellers": meta.get("n_sellers"),
+        "cv_mae": float(meta["cv_mae"]) if meta.get("cv_mae") is not None else None,
+        "cv_mape": float(meta["cv_mape"]) if meta.get("cv_mape") is not None else None,
+    }
+
+
+@router.delete("/inbound/model")
+def inbound_delete_model(
+    business_id: int = Query(...),
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+):
+    existed = delete_inbound_model(business_id, customer_id, warehouse_id)
+    return {"deleted": existed}
+
+
+@router.post("/inbound/cache/refresh")
+def inbound_cache_refresh(
+    business_id: int = Query(...),
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+    days_ahead: int = Query(30, ge=7, le=90),
+):
+    """Run inbound inference and re-populate the inbound forecast cache."""
+    try:
+        result = predict_inbound(
+            business_id, customer_id, warehouse_id,
+            days_ahead=days_ahead, include_aggregate=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    rows = []
+    for _, r in result.iterrows():
+        sid = r.get("seller_id")
+        rows.append({
+            "product_id": int(r["product_id"]),
+            "seller_id": (None if (sid is None or (isinstance(sid, float) and __import__("math").isnan(sid))) else int(sid)),
+            "forecast_date": r["date"],
+            "p10": float(r["p10"]),
+            "p50": float(r["p50"]),
+            "p90": float(r["p90"]),
+        })
+    saved = save_inbound_forecast_cache(business_id, customer_id, warehouse_id, rows)
+
+    return {
+        "rows_cached": saved,
         "days_ahead": days_ahead,
     }

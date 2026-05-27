@@ -294,3 +294,60 @@ async def cache_refresh(
         "/portfolio/cache/refresh",
         _params(biz, cust, wh, days_ahead=days_ahead),
     )
+
+
+# ── Inbound model ─────────────────────────────────────────────────────────────
+
+@router.post("/inbound/train")
+async def inbound_train(
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+    ctx: UserContext = Depends(get_user_context),
+):
+    biz, cust, wh = _resolve_scope(ctx, customer_id, warehouse_id)
+    return await _ml_post("/portfolio/inbound/train", _params(biz, cust, wh))
+
+
+@router.get("/inbound/train-progress")
+async def inbound_train_progress(
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+    ctx: UserContext = Depends(get_user_context),
+):
+    biz, cust, wh = _resolve_scope(ctx, customer_id, warehouse_id)
+    return await _ml_get("/portfolio/inbound/train-progress", _params(biz, cust, wh))
+
+
+@router.get("/inbound/status")
+async def inbound_model_status(
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+    ctx: UserContext = Depends(get_user_context),
+):
+    biz, cust, wh = _resolve_scope(ctx, customer_id, warehouse_id)
+    return await _ml_get("/portfolio/inbound/status", _params(biz, cust, wh))
+
+
+@router.delete("/inbound/model")
+async def inbound_delete_model(
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+    ctx: UserContext = Depends(get_user_context),
+):
+    biz, cust, wh = _resolve_scope(ctx, customer_id, warehouse_id)
+    return await _ml_delete("/portfolio/inbound/model", _params(biz, cust, wh))
+
+
+@router.post("/inbound/cache/refresh")
+async def inbound_cache_refresh(
+    customer_id: int = Query(...),
+    warehouse_id: int = Query(...),
+    days_ahead: int = Query(30, ge=7, le=90),
+    ctx: UserContext = Depends(get_user_context),
+):
+    """Trigger an immediate inbound forecast cache refresh for this scope."""
+    biz, cust, wh = _resolve_scope(ctx, customer_id, warehouse_id)
+    return await _ml_post(
+        "/portfolio/inbound/cache/refresh",
+        _params(biz, cust, wh, days_ahead=days_ahead),
+    )

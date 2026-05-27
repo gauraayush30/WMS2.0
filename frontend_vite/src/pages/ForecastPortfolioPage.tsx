@@ -250,11 +250,32 @@ interface ProductSellerForecast {
 interface InboundForecastData {
   start_date: string;
   end_date: string;
-  note: "historical_projection" | "no_history";
+  note: "ml_forecast" | "no_model" | "historical_projection" | "no_history";
   daily_total: InboundDayTotal[];
   by_seller: SellerForecast[];
   by_location: InboundLocationForecast[];
   by_product_seller: ProductSellerForecast[];
+}
+
+interface InboundTrainProgress {
+  status: string;
+  phase: string;
+  phase_detail: string;
+  elapsed_seconds: number;
+  result: unknown;
+  error: string | null;
+}
+
+interface InboundModelStatus {
+  has_model: boolean;
+  status: string | null;
+  trained_at: string | null;
+  data_start: string | null;
+  data_end: string | null;
+  n_products: number | null;
+  n_sellers: number | null;
+  cv_mae: number | null;
+  cv_mape: number | null;
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
@@ -274,10 +295,13 @@ export default function ForecastPortfolioPage() {
   const [forecastLoading, setForecastLoading] = useState(false);
   const [forecastStart, setForecastStart] = useState<string>(todayISO());
   const [forecastEnd,   setForecastEnd]   = useState<string>(plusDaysISO(30));
-  const [inboundData,    setInboundData]    = useState<InboundForecastData | null>(null);
-  const [inboundLoading, setInboundLoading] = useState(false);
-  const [inboundStart,   setInboundStart]   = useState<string>(todayISO());
-  const [inboundEnd,     setInboundEnd]     = useState<string>(plusDaysISO(30));
+  const [inboundData,        setInboundData]        = useState<InboundForecastData | null>(null);
+  const [inboundLoading,     setInboundLoading]     = useState(false);
+  const [inboundStart,       setInboundStart]       = useState<string>(todayISO());
+  const [inboundEnd,         setInboundEnd]         = useState<string>(plusDaysISO(30));
+  const [inboundTraining,    setInboundTraining]    = useState<InboundTrainProgress | null>(null);
+  const [inboundModelStatus, setInboundModelStatus] = useState<InboundModelStatus | null>(null);
+  const [inboundRefreshing,  setInboundRefreshing]  = useState(false);
 
   const scopeReady = effectiveCustomerId != null && selectedWarehouseId != null;
 
@@ -385,6 +409,55 @@ export default function ForecastPortfolioPage() {
   }, [authFetch, buildUrl, scopeReady]);
 
   useEffect(() => { fetchInboundForecast(inboundStart, inboundEnd); }, [fetchInboundForecast, inboundStart, inboundEnd]);
+
+  // Fetch inbound model status on mount / scope change
+  useEffect(() => {
+    if (!scopeReady) return;
+    authFetch(buildUrl("/forecast/portfolio/inbound/status")).then(r => {
+      if (r.ok) r.json().then(setInboundModelStatus);
+    });
+  }, [authFetch, buildUrl, scopeReady]);
+
+  // ── Inbound training control ──────────────────────────────────────────
+  const refreshInboundCache = useCallback(async () => {
+    if (!scopeReady) return;
+    setInboundRefreshing(true);
+    try {
+      await authFetch(buildUrl("/forecast/portfolio/inbound/cache/refresh", { days_ahead: 60 }), { method: "POST" });
+      await fetchInboundForecast(inboundStart, inboundEnd);
+    } finally {
+      setInboundRefreshing(false);
+    }
+  }, [authFetch, buildUrl, scopeReady, fetchInboundForecast, inboundStart, inboundEnd]);
+
+  const pollInboundTraining = useCallback(() => {
+    if (!scopeReady) return;
+    const tick = async () => {
+      const r = await authFetch(buildUrl("/forecast/portfolio/inbound/train-progress"));
+      if (!r.ok) return;
+      const j: InboundTrainProgress = await r.json();
+      setInboundTraining(j);
+      if (j.status === "training") setTimeout(tick, 2000);
+      else if (j.status === "ready") {
+        const sr = await authFetch(buildUrl("/forecast/portfolio/inbound/status"));
+        if (sr.ok) setInboundModelStatus(await sr.json());
+        await refreshInboundCache();
+      }
+    };
+    tick();
+  }, [authFetch, buildUrl, scopeReady, refreshInboundCache]);
+
+  const startInboundTraining = useCallback(async () => {
+    if (!scopeReady) return;
+    setInboundTraining({ status: "training", phase: "starting", phase_detail: "", elapsed_seconds: 0, result: null, error: null });
+    const r = await authFetch(buildUrl("/forecast/portfolio/inbound/train"), { method: "POST" });
+    if (!r.ok) {
+      const text = await r.text();
+      setInboundTraining({ status: "failed", phase: "failed", phase_detail: text, elapsed_seconds: 0, result: null, error: text });
+      return;
+    }
+    pollInboundTraining();
+  }, [authFetch, buildUrl, scopeReady, pollInboundTraining]);
 
   // ── Render guards ────────────────────────────────────────────────────
   if (!scopeReady) {
@@ -513,6 +586,11 @@ export default function ForecastPortfolioPage() {
             endDate={inboundEnd}
             onStartChange={setInboundStart}
             onEndChange={setInboundEnd}
+            modelStatus={inboundModelStatus}
+            training={inboundTraining}
+            refreshing={inboundRefreshing}
+            onTrain={startInboundTraining}
+            onRefreshCache={refreshInboundCache}
           />
         </TabsContent>
       </Tabs>
@@ -1373,6 +1451,7 @@ const SELLER_COLORS = [
 
 function InboundForecastPanel({
   data, loading, startDate, endDate, onStartChange, onEndChange,
+  modelStatus, training, refreshing, onTrain, onRefreshCache,
 }: {
   data: InboundForecastData | null;
   loading: boolean;
@@ -1380,6 +1459,11 @@ function InboundForecastPanel({
   endDate: string;
   onStartChange: (d: string) => void;
   onEndChange: (d: string) => void;
+  modelStatus: InboundModelStatus | null;
+  training: InboundTrainProgress | null;
+  refreshing: boolean;
+  onTrain: () => void;
+  onRefreshCache: () => void;
 }) {
   const [view, setView] = useState<"chart" | "table">("chart");
   const [section, setSection] = useState<"daily" | "seller" | "location" | "product">("product");
@@ -1387,15 +1471,51 @@ function InboundForecastPanel({
 
   if (loading) return <Skeleton className="h-96 w-full" />;
 
-  const isEmpty = !data || data.note === "no_history" ||
+  const isEmpty = !data || data.note === "no_model" || data.note === "no_history" ||
     (!data.daily_total.length && !data.by_seller.length && !data.by_product_seller.length);
 
-  const noHistoryMsg = data?.note === "no_history"
-    ? "No delivery history found for this warehouse. Inbound forecast requires at least one recorded inbound delivery."
-    : "No inbound forecast data available — record some inbound deliveries first.";
+  const emptyMsg =
+    data?.note === "no_model"
+      ? "Train the inbound model and refresh the cache to see forecasts."
+      : data?.note === "no_history"
+      ? "No inbound delivery history found."
+      : "No inbound forecast data available — try refreshing the cache.";
 
   return (
     <div className="space-y-4">
+      {/* Model status + train/refresh buttons */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {modelStatus?.has_model ? (
+          <Badge variant="outline" className="text-green-700 border-green-300">
+            Model ready · {modelStatus.n_sellers} sellers · MAE {modelStatus.cv_mae?.toFixed(1)}
+          </Badge>
+        ) : (
+          <Badge variant="secondary">No inbound model</Badge>
+        )}
+        <Button size="sm" variant="outline" onClick={onRefreshCache} disabled={refreshing || !modelStatus?.has_model}>
+          <RefreshCw className={"h-4 w-4 mr-1" + (refreshing ? " animate-spin" : "")} /> Refresh cache
+        </Button>
+        <Button size="sm" onClick={onTrain} disabled={training?.status === "training"}>
+          <Brain className="h-4 w-4 mr-1" />
+          {training?.status === "training" ? "Training…" : "Train inbound model"}
+        </Button>
+      </div>
+
+      {/* Training progress banner */}
+      {training?.status === "training" && (
+        <Alert>
+          <Brain className="h-4 w-4" />
+          {" "}Training inbound model — {training.phase}
+          {training.phase_detail ? `: ${training.phase_detail}` : ""}
+          {" ("}{training.elapsed_seconds.toFixed(0)}s)
+        </Alert>
+      )}
+      {training?.status === "failed" && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" /> Training failed: {training.error}
+        </Alert>
+      )}
+
       {/* Controls */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-1">
@@ -1403,9 +1523,6 @@ function InboundForecastPanel({
             startDate={startDate} endDate={endDate} today={today}
             onStartChange={onStartChange} onEndChange={onEndChange}
           />
-          <span className="text-xs text-muted-foreground pl-1">
-            Based on historical delivery patterns (last 90 days)
-          </span>
         </div>
         {!isEmpty && (
           <>
@@ -1437,7 +1554,7 @@ function InboundForecastPanel({
 
       {isEmpty ? (
         <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">{noHistoryMsg}</CardContent>
+          <CardContent className="py-12 text-center text-muted-foreground">{emptyMsg}</CardContent>
         </Card>
       ) : (
         <>
