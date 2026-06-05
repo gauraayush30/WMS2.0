@@ -53,6 +53,7 @@ interface ProductRow {
   id: number;
   name: string;
   sku_code: string | null;
+  uom: string | null;
   stock_at_warehouse: number;
   has_model: boolean;
   model_status: string | null;
@@ -631,6 +632,7 @@ function ProductsTable({ products, loading }: { products: ProductRow[]; loading:
               <TableHead>SKU</TableHead>
               <TableHead>Name</TableHead>
               <TableHead className="text-right">Stock</TableHead>
+              <TableHead>UOM</TableHead>
               <TableHead className="text-right">7d fcst</TableHead>
               <TableHead className="text-right">30d fcst</TableHead>
               <TableHead className="text-right">DoS</TableHead>
@@ -647,6 +649,7 @@ function ProductsTable({ products, loading }: { products: ProductRow[]; loading:
                   <TableCell className="font-mono text-xs">{p.sku_code ?? "-"}</TableCell>
                   <TableCell className="font-medium">{p.name}</TableCell>
                   <TableCell className="text-right tabular-nums">{p.stock_at_warehouse}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{p.uom ?? "—"}</TableCell>
                   <TableCell className="text-right tabular-nums">{p.forecast_7d.toFixed(0)}</TableCell>
                   <TableCell className="text-right tabular-nums">{p.forecast_30d.toFixed(0)}</TableCell>
                   <TableCell className="text-right tabular-nums">

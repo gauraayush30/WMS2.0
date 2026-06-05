@@ -122,6 +122,7 @@ def get_portfolio_summary(
             "id": pid,
             "name": p["name"],
             "sku_code": p.get("sku_code"),
+            "uom": p.get("uom"),
             "stock_at_warehouse": stock,
             "lead_time_days": int(p.get("lead_time_days") or 0),
             "has_model": has_model,

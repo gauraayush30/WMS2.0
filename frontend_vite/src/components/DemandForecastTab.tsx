@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -150,6 +149,8 @@ export default function DemandForecastTab({
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [days, setDays] = useState(30);
+  const [customDays, setCustomDays] = useState("");
+  const [isCustom, setIsCustom] = useState(false);
   const [msg, setMsg] = useState<{
     type: "success" | "destructive" | "warning";
     text: string;
@@ -575,22 +576,43 @@ export default function DemandForecastTab({
                 </>
               )}
             </Button>
-            <div className="flex items-center gap-2 ml-auto">
-              <Label
-                htmlFor="days-input"
-                className="text-xs text-muted-foreground"
+            <div className="flex items-center gap-2 ml-auto flex-wrap">
+              <span className="text-xs text-muted-foreground">Days:</span>
+              {[7, 30, 90].map((d) => (
+                <Button
+                  key={d}
+                  variant={!isCustom && days === d ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 px-3"
+                  onClick={() => { setDays(d); setIsCustom(false); setCustomDays(""); }}
+                >
+                  {d}
+                </Button>
+              ))}
+              <Button
+                variant={isCustom ? "default" : "outline"}
+                size="sm"
+                className="h-8 px-3"
+                onClick={() => { setIsCustom(true); setCustomDays(String(days)); }}
               >
-                Days:
-              </Label>
-              <Input
-                id="days-input"
-                type="number"
-                min={7}
-                max={180}
-                value={days}
-                onChange={(e) => setDays(Number(e.target.value))}
-                className="w-20 h-8"
-              />
+                Custom
+              </Button>
+              {isCustom && (
+                <Input
+                  type="number"
+                  min={7}
+                  max={365}
+                  value={customDays}
+                  onChange={(e) => {
+                    setCustomDays(e.target.value);
+                    const n = Number(e.target.value);
+                    if (n >= 1) setDays(n);
+                  }}
+                  className="w-20 h-8"
+                  autoFocus
+                  placeholder="days"
+                />
+              )}
             </div>
           </div>
 
@@ -728,7 +750,7 @@ export default function DemandForecastTab({
               className="space-y-4 mt-4"
             >
               {/* Key Stats */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
                 <Card>
                   <CardContent className="p-4">
                     <p className="text-xs text-muted-foreground">
@@ -777,6 +799,24 @@ export default function DemandForecastTab({
                         </span>
                       </div>
                     )}
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground">Total Inbound</p>
+                    <p className="text-2xl font-bold text-emerald-600">
+                      {Math.round(prediction.predictions.reduce((s, d) => s + d.predicted_inbound, 0)).toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">over {prediction.days_ahead}d</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground">Total Outbound</p>
+                    <p className="text-2xl font-bold text-red-600">
+                      {Math.round(prediction.predictions.reduce((s, d) => s + d.predicted_outbound, 0)).toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">over {prediction.days_ahead}d</p>
                   </CardContent>
                 </Card>
               </div>
